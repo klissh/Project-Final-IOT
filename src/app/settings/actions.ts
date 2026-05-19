@@ -63,3 +63,43 @@ export async function updateSettings(formData: FormData) {
   revalidatePath('/settings')
   return { success: true }
 }
+
+export async function updateBuzzerEnabled(enabled: boolean) {
+  const supabase = await createClient()
+  const { data: existing } = await supabase.from('system_settings').select('id').limit(1).single()
+  if (existing) {
+    await supabase.from('system_settings').update({ buzzer_enabled: enabled }).eq('id', existing.id)
+  } else {
+    await supabase.from('system_settings').insert([{ buzzer_enabled: enabled }])
+  }
+  revalidatePath('/settings')
+  revalidatePath('/live')
+  return { success: true }
+}
+
+export async function updateTelegramEnabled(enabled: boolean) {
+  const supabase = await createClient()
+  const { data: existing } = await supabase.from('system_settings').select('id').limit(1).single()
+  if (existing) {
+    await supabase.from('system_settings').update({ telegram_enabled: enabled }).eq('id', existing.id)
+  } else {
+    await supabase.from('system_settings').insert([{ telegram_enabled: enabled }])
+  }
+  revalidatePath('/settings')
+  revalidatePath('/live')
+  return { success: true }
+}
+
+export async function updateLogEnabled(enabled: boolean) {
+  const supabase = await createClient()
+  const { data: existing } = await supabase.from('system_settings').select('id').limit(1).single()
+  if (existing) {
+    await supabase.from('system_settings').update({ log_enabled: enabled }).eq('id', existing.id)
+  } else {
+    await supabase.from('system_settings').insert([{ log_enabled: enabled }])
+  }
+  revalidatePath('/settings')
+  revalidatePath('/live')
+  return { success: true }
+}
+

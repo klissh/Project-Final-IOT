@@ -2,8 +2,23 @@ import os
 import serial
 import time
 from dotenv import load_dotenv
+from pathlib import Path
 
-load_dotenv()
+# Load environment variables
+current_dir = Path(__file__).parent.resolve()
+for _ in range(4):
+    env_found = False
+    for filename in [".env.local", ".env"]:
+        path = current_dir / filename
+        if path.exists():
+            load_dotenv(dotenv_path=path)
+            env_found = True
+            break
+    if env_found:
+        break
+    current_dir = current_dir.parent
+else:
+    load_dotenv()
 
 COM_PORT = os.getenv("ESP32_COM_PORT", "COM3")
 BAUD_RATE = int(os.getenv("BAUD_RATE", "115200"))

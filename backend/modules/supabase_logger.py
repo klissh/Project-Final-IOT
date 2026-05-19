@@ -3,9 +3,23 @@ import uuid
 from datetime import datetime
 from supabase import create_client, Client
 from dotenv import load_dotenv
+from pathlib import Path
 
 # Load environment variables
-load_dotenv()
+current_dir = Path(__file__).parent.resolve()
+for _ in range(4):
+    env_found = False
+    for filename in [".env.local", ".env"]:
+        path = current_dir / filename
+        if path.exists():
+            load_dotenv(dotenv_path=path)
+            env_found = True
+            break
+    if env_found:
+        break
+    current_dir = current_dir.parent
+else:
+    load_dotenv()
 
 # Setup Supabase Client
 url: str = os.getenv("SUPABASE_URL", "")

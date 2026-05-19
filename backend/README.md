@@ -305,7 +305,7 @@ npm install
 
 # 3. Setup .env.local
 cp .env.local.example .env.local
-# Isi NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY,
+# Isi SUPABASE_URL, SUPABASE_ANON_KEY,
 # dan NEXT_PUBLIC_PYTHON_STREAM_URL (mis. http://192.168.1.10:8000)
 
 # 4. Jalankan dev server

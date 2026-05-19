@@ -6,9 +6,24 @@ from fastapi.responses import StreamingResponse
 import uvicorn
 import os
 from dotenv import load_dotenv
+from pathlib import Path
 from fastapi.middleware.cors import CORSMiddleware
 
-load_dotenv()
+# Load environment variables
+current_dir = Path(__file__).parent.resolve()
+for _ in range(4):
+    env_found = False
+    for filename in [".env.local", ".env"]:
+        path = current_dir / filename
+        if path.exists():
+            load_dotenv(dotenv_path=path)
+            env_found = True
+            break
+    if env_found:
+        break
+    current_dir = current_dir.parent
+else:
+    load_dotenv()
 
 app = FastAPI()
 
