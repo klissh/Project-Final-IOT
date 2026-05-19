@@ -1,0 +1,27 @@
+# Smart Kitchen Hygiene Detection - Local Webcam Inference
+# Install dengan: pip install -r requirements.txt
+
+# Core ML
+ultralytics>=8.4.0
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Computer Vision
+opencv-python>=4.8.0
+
+# Visualization
+matplotlib>=3.7.0
+
+# ONNX inference (optional, untuk benchmark)
+onnxruntime-gpu>=1.16.0
+
+# Utilities
+numpy>=1.26.0
+Pillow>=10.0.0
+
+# Backend, Cloud, and IoT Integration (Added for Sprint 2 & 3)
+supabase>=2.4.0
+fastapi>=0.111.0
+uvicorn>=0.30.0
+pyserial>=3.5
+python-dotenv>=1.0.1
