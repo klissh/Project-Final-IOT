@@ -48,6 +48,7 @@ dashboard/out/
 # =========================
 .env
 .env*.local
+.env*.vercel
 
 # =========================
 # Vercel
