@@ -96,6 +96,9 @@ export function LiveMonitorClient({ initialSettings }: { initialSettings: any })
       const ws = new WebSocket(wsUrl)
       wsRef.current = ws
 
+      // State to track if we're waiting for AI response
+      let isWaitingForResponse = false
+
       ws.onopen = () => {
         setWsConnected(true)
         toast.success('Terhubung ke AI Server', { description: 'WebSocket connected, streaming dimulai.' })
@@ -103,6 +106,7 @@ export function LiveMonitorClient({ initialSettings }: { initialSettings: any })
       }
 
       ws.onmessage = (event) => {
+        isWaitingForResponse = false // Unlock for next frame
         try {
           const data = JSON.parse(event.data)
           if (data.annotated_frame) {
@@ -132,10 +136,50 @@ export function LiveMonitorClient({ initialSettings }: { initialSettings: any })
       ws.onerror = () => {
         toast.error('WebSocket Error', { description: 'Gagal terhubung ke AI Server.' })
         setWsConnected(false)
+        isWaitingForResponse = false
       }
 
       ws.onclose = () => {
         setWsConnected(false)
+        isWaitingForResponse = false
+      }
+
+      const startFrameLoop = () => {
+        const sendFrame = () => {
+          if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return
+          if (!videoRef.current || !canvasRef.current) return
+
+          // Lock mechanism: Don't send if backend is still processing previous frame!
+          // This prevents massive queue buildup and latency spikes
+          if (isWaitingForResponse) {
+             frameLoopRef.current = window.setTimeout(sendFrame, 30) // check again in 30ms
+             return
+          }
+
+          const video = videoRef.current
+          const canvas = canvasRef.current
+          const ctx = canvas.getContext('2d')
+          if (!ctx) return
+
+          // Force resize to max 640x480 to keep base64 string small
+          const targetWidth = 640
+          const targetHeight = 480
+          canvas.width = targetWidth
+          canvas.height = targetHeight
+          ctx.drawImage(video, 0, 0, targetWidth, targetHeight)
+
+          // Convert to JPEG base64 (Lower quality to 0.4 for faster network transfer)
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.4)
+          const base64 = dataUrl.split(',')[1]
+
+          isWaitingForResponse = true
+          wsRef.current.send(JSON.stringify({ frame: base64 }))
+
+          // Schedule next frame check very quickly, but it will be blocked by isWaitingForResponse
+          frameLoopRef.current = window.setTimeout(sendFrame, 30)
+        }
+
+        sendFrame()
       }
 
     } catch (err) {
@@ -145,34 +189,6 @@ export function LiveMonitorClient({ initialSettings }: { initialSettings: any })
       })
     }
   }, [wsUrl])
-
-  const startFrameLoop = useCallback(() => {
-    const sendFrame = () => {
-      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return
-      if (!videoRef.current || !canvasRef.current) return
-
-      const video = videoRef.current
-      const canvas = canvasRef.current
-      const ctx = canvas.getContext('2d')
-      if (!ctx) return
-
-      canvas.width = video.videoWidth || 640
-      canvas.height = video.videoHeight || 480
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-
-      // Convert to JPEG base64
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.7)
-      const base64 = dataUrl.split(',')[1]
-
-      wsRef.current.send(JSON.stringify({ frame: base64 }))
-
-      // Schedule next frame (~10 FPS for cloud to avoid overloading)
-      frameLoopRef.current = window.setTimeout(sendFrame, 100)
-    }
-
-    sendFrame()
-  }, [])
-
   const stopWebcam = useCallback(() => {
     // Stop frame loop
     if (frameLoopRef.current) {
