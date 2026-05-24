@@ -78,31 +78,28 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
     <div className="flex h-screen bg-background text-foreground overflow-hidden">
       {/* ── Sidebar ── */}
       <aside
-        className={`hidden md:flex flex-col border-r border-border bg-card shrink-0 overflow-hidden select-none ${
-          isReady ? 'transition-[width] duration-300 ease-in-out' : ''
-        } ${collapsed ? 'w-16' : 'w-60'}`}
+        className={`hidden md:flex flex-col border-r border-border bg-card shrink-0 overflow-hidden select-none ${isReady ? 'transition-[width] duration-300 ease-in-out' : ''
+          } ${collapsed ? 'w-16' : 'w-60'}`}
       >
         {/* Logo */}
         <div className="flex items-center h-16 px-4 gap-3 border-b border-border shrink-0 overflow-hidden">
-          <div className="flex h-8 w-8 items-center justify-center shrink-0 overflow-hidden p-0.5">
+          <div className="flex h-11 w-11 items-center justify-center shrink-0 overflow-hidden">
             <Image src={logoArka} alt="ArkaHygiene" className="w-full h-full object-contain mix-blend-multiply dark:mix-blend-screen dark:invert opacity-90" />
           </div>
           <div
-            className={`flex flex-col transition-all duration-300 ease-in-out ${
-              collapsed ? 'opacity-0 translate-x-4 pointer-events-none' : 'opacity-100 translate-x-0'
-            }`}
+            className={`flex flex-col transition-all duration-300 ease-in-out ${collapsed ? 'opacity-0 translate-x-4 pointer-events-none' : 'opacity-100 translate-x-0'
+              }`}
           >
             <p className="text-sm font-bold leading-none text-foreground tracking-tight whitespace-nowrap">ArkaHygiene</p>
-            <p className="text-[10px] text-muted-foreground mt-0.5 font-mono whitespace-nowrap">AIoT Monitor</p>
+            <p className="text-[10px] text-muted-foreground mt-0.5 font-mono whitespace-nowrap">Smart Kitchen</p>
           </div>
         </div>
 
         {/* Nav */}
         <nav className="flex-1 overflow-y-auto overflow-x-hidden py-3 px-3 space-y-1.5">
           <p
-            className={`px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60 font-mono transition-all duration-300 ease-in-out ${
-              collapsed ? 'opacity-0 translate-x-2 pointer-events-none' : 'opacity-100 translate-x-0'
-            }`}
+            className={`px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60 font-mono transition-all duration-300 ease-in-out ${collapsed ? 'opacity-0 translate-x-2 pointer-events-none' : 'opacity-100 translate-x-0'
+              }`}
           >
             Menu
           </p>
@@ -113,29 +110,25 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
                 key={item.name}
                 href={item.href}
                 title={collapsed ? item.name : undefined}
-                className={`group flex items-center rounded-lg h-10 w-full px-3 transition-colors duration-200 ${
-                  isActive
+                className={`group flex items-center rounded-lg h-10 w-full px-3 transition-colors duration-200 ${isActive
                     ? 'bg-secondary text-foreground'
                     : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground'
-                }`}
+                  }`}
               >
                 <item.icon
-                  className={`h-4 w-4 shrink-0 transition-colors duration-200 ${
-                    isActive ? 'text-foreground' : 'text-muted-foreground/70 group-hover:text-foreground'
-                  }`}
+                  className={`h-4 w-4 shrink-0 transition-colors duration-200 ${isActive ? 'text-foreground' : 'text-muted-foreground/70 group-hover:text-foreground'
+                    }`}
                 />
                 <span
-                  className={`ml-3 whitespace-nowrap transition-all duration-300 ease-in-out ${
-                    collapsed ? 'opacity-0 translate-x-4 pointer-events-none' : 'opacity-100 translate-x-0'
-                  }`}
+                  className={`ml-3 whitespace-nowrap transition-all duration-300 ease-in-out ${collapsed ? 'opacity-0 translate-x-4 pointer-events-none' : 'opacity-100 translate-x-0'
+                    }`}
                 >
                   {item.name}
                 </span>
                 {isActive && (
                   <ChevronRight
-                    className={`ml-auto h-3 w-3 text-muted-foreground/40 transition-all duration-300 ease-in-out ${
-                      collapsed ? 'opacity-0 translate-x-2 pointer-events-none' : 'opacity-100 translate-x-0'
-                    }`}
+                    className={`ml-auto h-3 w-3 text-muted-foreground/40 transition-all duration-300 ease-in-out ${collapsed ? 'opacity-0 translate-x-2 pointer-events-none' : 'opacity-100 translate-x-0'
+                      }`}
                   />
                 )}
               </Link>
@@ -156,9 +149,8 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
               {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
             </div>
             <span
-              className={`ml-3 whitespace-nowrap transition-all duration-300 ease-in-out ${
-                collapsed ? 'opacity-0 translate-x-4 pointer-events-none' : 'opacity-100 translate-x-0'
-              }`}
+              className={`ml-3 whitespace-nowrap transition-all duration-300 ease-in-out ${collapsed ? 'opacity-0 translate-x-4 pointer-events-none' : 'opacity-100 translate-x-0'
+                }`}
             >
               {dark ? 'Light mode' : 'Dark mode'}
             </span>
@@ -173,9 +165,8 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
             >
               <LogOut className="h-4 w-4 shrink-0 group-hover:text-destructive transition-colors duration-200" />
               <span
-                className={`ml-3 whitespace-nowrap transition-all duration-300 ease-in-out ${
-                  collapsed ? 'opacity-0 translate-x-4 pointer-events-none' : 'opacity-100 translate-x-0'
-                }`}
+                className={`ml-3 whitespace-nowrap transition-all duration-300 ease-in-out ${collapsed ? 'opacity-0 translate-x-4 pointer-events-none' : 'opacity-100 translate-x-0'
+                  }`}
               >
                 Keluar
               </span>
