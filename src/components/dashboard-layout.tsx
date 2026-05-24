@@ -84,8 +84,8 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
       >
         {/* Logo */}
         <div className="flex items-center h-16 px-4 gap-3 border-b border-border shrink-0 overflow-hidden">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-foreground text-background shrink-0 shadow-sm overflow-hidden p-0.5">
-            <Image src={logoArka} alt="ArkaHygiene" className="w-full h-full object-contain" />
+          <div className="flex h-8 w-8 items-center justify-center shrink-0 overflow-hidden p-0.5">
+            <Image src={logoArka} alt="ArkaHygiene" className="w-full h-full object-contain mix-blend-multiply dark:mix-blend-screen dark:invert opacity-90" />
           </div>
           <div
             className={`flex flex-col transition-all duration-300 ease-in-out ${

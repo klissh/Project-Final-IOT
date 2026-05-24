@@ -22,8 +22,8 @@ export function LoginForm({ errorMessage }: { errorMessage?: string }) {
     <div className="w-full max-w-[390px] p-7 md:p-8 rounded-2xl border border-zinc-900 bg-zinc-950/40 backdrop-blur-md shadow-2xl text-zinc-200 relative overflow-hidden">
       {/* Brand Header */}
       <div className="flex flex-col items-center text-center space-y-4 mb-7">
-        <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-white text-black shrink-0 shadow-sm overflow-hidden p-1">
-          <Image src={logoArka} alt="ArkaHygiene" className="w-full h-full object-contain" />
+        <div className="flex h-12 w-12 items-center justify-center shrink-0 overflow-hidden p-1">
+          <Image src={logoArka} alt="ArkaHygiene" className="w-full h-full object-contain mix-blend-screen invert opacity-90" />
         </div>
         
         <div className="space-y-1">
