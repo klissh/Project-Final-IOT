@@ -8,6 +8,9 @@ import {
 } from 'lucide-react'
 import { signOut } from '@/app/login/actions'
 
+import Image from 'next/image'
+import logoArka from '@/components/logo/logo arkahygiene.png'
+
 // Persistent in-memory state across client-side SPA navigations to prevent page transition glitches
 let globalCollapsed = false
 
@@ -81,18 +84,16 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
       >
         {/* Logo */}
         <div className="flex items-center h-16 px-4 gap-3 border-b border-border shrink-0 overflow-hidden">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-foreground text-background shrink-0 shadow-sm">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M3 2h18v20H3z" /><path d="M7 6h10" /><path d="M7 10h10" /><path d="M7 14h5" />
-            </svg>
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-foreground text-background shrink-0 shadow-sm overflow-hidden p-0.5">
+            <Image src={logoArka} alt="ArkaHygiene" className="w-full h-full object-contain" />
           </div>
           <div
             className={`flex flex-col transition-all duration-300 ease-in-out ${
               collapsed ? 'opacity-0 translate-x-4 pointer-events-none' : 'opacity-100 translate-x-0'
             }`}
           >
-            <p className="text-sm font-semibold leading-none text-foreground tracking-tight whitespace-nowrap">Smart Kitchen</p>
-            <p className="text-[10px] text-muted-foreground mt-0.5 font-mono whitespace-nowrap">Hygiene Monitor</p>
+            <p className="text-sm font-bold leading-none text-foreground tracking-tight whitespace-nowrap">ArkaHygiene</p>
+            <p className="text-[10px] text-muted-foreground mt-0.5 font-mono whitespace-nowrap">AIoT Monitor</p>
           </div>
         </div>
 
@@ -197,9 +198,9 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
               {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
             </button>
 
-            <span className="font-mono text-xs">Smart Kitchen</span>
+            <span className="font-mono text-xs font-bold text-foreground">ArkaHygiene</span>
             <span>/</span>
-            <span className="font-medium text-foreground">{pageTitle}</span>
+            <span className="font-medium text-muted-foreground">{pageTitle}</span>
           </div>
 
           <div className="flex items-center gap-2">

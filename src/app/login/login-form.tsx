@@ -7,6 +7,9 @@ import { Label } from '@/components/ui/label'
 import { Eye, EyeOff, Loader2, AlertCircle } from 'lucide-react'
 import { login } from './actions'
 
+import Image from 'next/image'
+import logoArka from '@/components/logo/logo arkahygiene.png'
+
 export function LoginForm({ errorMessage }: { errorMessage?: string }) {
   const [showPassword, setShowPassword] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
@@ -19,15 +22,13 @@ export function LoginForm({ errorMessage }: { errorMessage?: string }) {
     <div className="w-full max-w-[390px] p-7 md:p-8 rounded-2xl border border-zinc-900 bg-zinc-950/40 backdrop-blur-md shadow-2xl text-zinc-200 relative overflow-hidden">
       {/* Brand Header */}
       <div className="flex flex-col items-center text-center space-y-4 mb-7">
-        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-white text-black shrink-0 shadow-sm">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M3 2h18v20H3z" /><path d="M7 6h10" /><path d="M7 10h10" /><path d="M7 14h5" />
-          </svg>
+        <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-white text-black shrink-0 shadow-sm overflow-hidden p-1">
+          <Image src={logoArka} alt="ArkaHygiene" className="w-full h-full object-contain" />
         </div>
         
         <div className="space-y-1">
           <h2 className="text-xl font-bold tracking-tight text-white">
-            Smart Kitchen Admin
+            ArkaHygiene Admin
           </h2>
           <p className="text-xs text-zinc-500 leading-normal">
             Masukkan kredensial Anda untuk mengakses dashboard AIoT.

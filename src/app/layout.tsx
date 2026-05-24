@@ -19,8 +19,8 @@ const jetbrains = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Smart Kitchen Hygiene Monitor",
-  description: "AIoT Dashboard for Kitchen Hygiene Monitoring",
+  title: 'ArkaHygiene - AIoT Monitor',
+  description: 'AIoT Kitchen Hygiene Surveillance by ARKAnalytics',
 };
 
 export default function RootLayout({
