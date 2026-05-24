@@ -1,20 +1,26 @@
 """
-Smart Kitchen Hygiene Detection - Webcam Real-Time Inference
+Smart Kitchen Hygiene Detection - AIoT Engine
 =============================================================
 
-Test model YOLOv8 hygiene detection dengan webcam laptop.
-Tekan 'Q' atau ESC untuk keluar.
-Tekan 'S' untuk screenshot frame saat ini.
-Tekan 'R' untuk start/stop recording video.
+Dual mode:
+  LOCAL: Membuka webcam langsung, streaming MJPEG, Serial ke ESP32
+  CLOUD: Menerima frame dari browser via WebSocket, MQTT ke ESP32
+
+Tracking Mode:
+  Menggunakan YOLOv8 Tracker (BoT-SORT) untuk memberikan ID unik pada pekerja.
+  Menerapkan Stateful Debounce untuk mengurangi spam notifikasi.
 
 Requirements:
-  pip install ultralytics opencv-python numpy
+  pip install -r requirements.txt
 
 Usage:
-  python webcam_inference.py
+  python main.py                  # mode lokal (default)
+  DEPLOY_MODE=cloud python main.py  # mode cloud (untuk HF Spaces)
 """
 import cv2
 import time
+import os
+import base64
 import numpy as np
 from datetime import datetime
 from pathlib import Path
@@ -44,28 +50,20 @@ from modules import supabase_logger, telegram_alert, esp32_serial, stream_server
 # ============================================================
 # KONFIGURASI
 # ============================================================
+DEPLOY_MODE = os.getenv("DEPLOY_MODE", "local").lower()
 MODEL_PATH = "best.pt"           # Path ke model (relatif terhadap script)
 WEBCAM_INDEX = 0                 # 0 = webcam default. Coba 1, 2 jika multi-camera
 CONFIDENCE = 0.4                 # Confidence threshold (0.0 - 1.0)
-IOU_THRESHOLD = 0.35             # DITURUNKAN: IoU threshold lebih ketat untuk menekan double box
-AGNOSTIC_NMS = True              # AKTIF: Mencegah box beda kelas tumpang tindih (misal with_hairnet vs without_mask)
-IMG_SIZE = 640                   # Image size untuk inference (640 = optimal)
+IOU_THRESHOLD = 0.35             # IoU threshold untuk NMS
+AGNOSTIC_NMS = False             # Harus False agar box 'with_mask' & 'with_hairnet' bisa tumpang tindih di 1 wajah
+IMG_SIZE = 640                   # Image size untuk inference
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-# Setup Debounce untuk Logging ke Supabase (jangan log pelanggaran yang sama tiap frame)
-LOG_DEBOUNCE_SECONDS = 15
-last_log_time = {
-    "no_both": 0,
-    "no_mask": 0,
-    "no_hairnet": 0,
-    "left_post": 0
-}
-
-# Resolusi webcam (sesuaikan dengan kamera Anda)
+# Resolusi webcam
 FRAME_WIDTH = 1280
 FRAME_HEIGHT = 720
 
-# Output folder untuk screenshot & recording
+# Output folder untuk screenshot
 OUTPUT_DIR = Path("output")
 OUTPUT_DIR.mkdir(exist_ok=True)
 
@@ -76,74 +74,77 @@ COLORS = {
     "without_mask_hairnet": (0, 0, 255),  # Merah
 }
 
-def draw_custom_boxes(frame, results, names, roi_points=None):
-    """Menggambar bounding box custom dengan warna sesuai kelas, dan mengecek apakah ada objek di dalam ROI."""
-    detected_classes = set()
-    is_someone_in_roi = False
-    
-    for box in results[0].boxes:
-        # Ambil koordinat, class, dan confidence
-        x1, y1, x2, y2 = map(int, box.xyxy[0])
-        cls_id = int(box.cls[0])
-        conf = float(box.conf[0])
-        cls_name = names[cls_id]
-        
-        # CEK POSISI DI ROI (POS KERJA)
-        if roi_points and len(roi_points) >= 3:
-            # Hitung titik tengah bawah (kaki/badan bawah) objek
-            cx = int((x1 + x2) / 2)
-            cy = int(y2 - ((y2 - y1) * 0.1)) # 10% dari bawah
-            # Cek apakah koordinat tersebut ada di dalam polygon pos kerja
-            dist = cv2.pointPolygonTest(np.array(roi_points, np.int32), (cx, cy), False)
-            if dist >= 0:
-                is_someone_in_roi = True
-        
-        detected_classes.add(cls_name)
-        color = COLORS.get(cls_name, (255, 255, 255))
-        
-        # Gambar Bounding Box
-        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-        
-        # Background untuk text label
-        label = f"{cls_name} {conf:.2f}"
-        (w, h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
-        cv2.rectangle(frame, (x1, y1 - 25), (x1 + w, y1), color, -1)
-        
-        # Tulis text label
-        cv2.putText(frame, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
-        
-    return detected_classes, is_someone_in_roi
+# ============================================================
+# SHARED STATE (digunakan oleh kedua mode)
+# ============================================================
+sys_settings = {
+    "telegram_bot_active": True,
+    "esp32_buzzer_active": True,
+    "ai_detection_active": True,
+    "log_enabled": True,
+    "ai_confidence_threshold": CONFIDENCE,
+    "empty_post_timer": 5
+}
+
+sys_roi_points = []
+roi_empty_start_time = None
+last_log_time_left_post = 0
+last_settings_poll = 0
+
+model = None
+names = None
+
+# ============================================================
+# STATEFUL TRACKER DICTIONARY
+# ============================================================
+# Format: tracker_id -> { "status": "safe", "violation_start": 0, "safe_start": 0, "last_buzz_time": 0, "last_log_time": 0, "last_seen": 0 }
+active_trackers = {}
+
+
+def poll_settings():
+    """Polling settings dari Supabase setiap 10 detik."""
+    global sys_settings, sys_roi_points, last_settings_poll
+
+    current_time = time.time()
+    if current_time - last_settings_poll > 10:
+        db_settings = supabase_logger.get_system_settings()
+        if db_settings:
+            sys_settings["telegram_bot_active"] = db_settings.get("telegram_enabled", True)
+            sys_settings["esp32_buzzer_active"] = db_settings.get("buzzer_enabled", True)
+            sys_settings["ai_detection_active"] = db_settings.get("ai_detection_active", True)
+            sys_settings["log_enabled"] = db_settings.get("log_enabled", True)
+            sys_settings["ai_confidence_threshold"] = float(db_settings.get("confidence_threshold", CONFIDENCE))
+            sys_settings["empty_post_timer"] = int(db_settings.get("empty_post_timer", 5))
+
+        db_roi = supabase_logger.get_roi_config()
+        if db_roi is not None:
+            sys_roi_points = db_roi
+        else:
+            sys_roi_points = []
+
+        last_settings_poll = current_time
+
 
 def process_violation_async(frame, violation_type, confidence, trigger_buzzer=True, send_telegram=True, log_enabled=True):
-    """Fungsi ini berjalan di background thread untuk mencegah lag pada kamera"""
+    """Berjalan di background thread. Menyimpan log DB dan kirim Telegram."""
     print(f"\n⚠️ Merekam pelanggaran: {violation_type} (conf: {confidence:.2f})")
-    
-    # 0. TRIGGER IoT BUZZER (Seketika!)
+
     if trigger_buzzer:
         esp32_serial.trigger_buzzer()
-        
+
     if not log_enabled:
-        print("⏭️ Fitur Log DB dimatikan. Melewati proses upload screenshot.")
-        # Jika log mati, telegram otomatis tidak bisa mengirim foto
         if send_telegram:
-            print("⚠️ Telegram aktif tapi Log mati, pesan terkirim tanpa foto.")
             telegram_alert.send_alert(violation_type, confidence, "")
         return
-    
-    # 1. Encode frame ke JPEG (in-memory)
+
     success, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
     if not success:
-        print("❌ Gagal encode frame untuk diupload")
         return
-        
+
     image_bytes = buffer.tobytes()
-    
-    # 2. Upload ke Supabase Storage
     public_url, violation_id = supabase_logger.upload_screenshot(image_bytes)
-    
+
     if public_url:
-        print(f"✅ Screenshot terupload: {public_url}")
-        # 3. Insert record pelanggaran ke DB
         supabase_logger.insert_violation(
             violation_id=violation_id,
             violation_type=violation_type,
@@ -151,308 +152,367 @@ def process_violation_async(frame, violation_type, confidence, trigger_buzzer=Tr
             screenshot_url=public_url,
             camera_index=WEBCAM_INDEX
         )
-        print("✅ Log pelanggaran berhasil disimpan ke database")
-        
-        # 4. KIRIM TELEGRAM ALERT
         if send_telegram:
             telegram_alert.send_alert(violation_type, confidence, public_url)
-    else:
-        print("❌ Gagal mengunggah screenshot, log dibatalkan.")
 
-def get_hygiene_status(detected_classes):
-    """Menentukan status hygiene berdasarkan deteksi."""
-    if len(detected_classes) == 0:
-        return "TIDAK TERDETEKSI", (128, 128, 128)  # Abu-abu
-    elif "without_mask_hairnet" in detected_classes:
-        return "PELANGGARAN!", (0, 0, 255)  # Merah
-    elif "with_mask" in detected_classes and "with_hairnet" in detected_classes:
-        return "AMAN", (0, 255, 0)  # Hijau
-    else:
-        # Hanya pakai salah satu (masker saja atau hairnet saja)
-        return "PERHATIAN (Tidak Lengkap)", (0, 255, 255)  # Kuning
 
-def main():
-    print("=" * 60)
-    print("🍳 SMART KITCHEN HYGIENE DETECTION - WEBCAM")
-    print("=" * 60)
+def group_boxes_by_person(boxes, class_names):
+    """
+    Mengelompokkan bounding boxes menjadi "Orang/Pekerja" berdasarkan kedekatan jarak spasial.
+    Memungkinkan kita menggabungkan box 'with_mask' dan 'with_hairnet' ke orang yang sama.
+    """
+    groups = []
+    for box in boxes:
+        x1, y1, x2, y2 = map(int, box.xyxy[0])
+        cls_id = int(box.cls[0])
+        cls_name = class_names[cls_id]
+        conf = float(box.conf[0])
+        track_id = int(box.id[0]) if box.id is not None else None
+
+        cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+        matched = False
+
+        for g in groups:
+            gx1, gy1, gx2, gy2 = g['rect']
+            gcx, gcy = (gx1 + gx2) / 2, (gy1 + gy2) / 2
+            
+            # Toleransi jarak: 1.5x dari lebar/tinggi box
+            dist = ((cx - gcx)**2 + (cy - gcy)**2)**0.5
+            max_dist = max(x2 - x1, gx2 - gx1, y2 - y1, gy2 - gy1) * 1.5
+            
+            if dist < max_dist:
+                g['classes'].add(cls_name)
+                g['confs'].append(conf)
+                if track_id is not None:
+                    g['track_ids'].add(track_id)
+                # Perluas rect grup
+                g['rect'] = (min(x1, gx1), min(y1, gy1), max(x2, gx2), max(y2, gy2))
+                matched = True
+                break
+                
+        if not matched:
+            groups.append({
+                'rect': (x1, y1, x2, y2),
+                'classes': {cls_name},
+                'confs': [conf],
+                'track_ids': {track_id} if track_id is not None else set()
+            })
+            
+    return groups
+
+
+def process_single_frame(frame):
+    """
+    Proses satu frame menggunakan YOLOv8 Tracking (BoT-SORT) + Stateful Debouncing.
+    """
+    global roi_empty_start_time, last_log_time_left_post, active_trackers
+
+    poll_settings()
+
+    if not sys_settings["ai_detection_active"]:
+        return frame, set(), "CCTV MODE (AI MATI)", (255, 255, 255), False
+
+    # Inference menggunakan tracker!
+    results = model.track(
+        source=frame,
+        conf=sys_settings["ai_confidence_threshold"],
+        iou=IOU_THRESHOLD,
+        agnostic_nms=AGNOSTIC_NMS,
+        imgsz=IMG_SIZE,
+        device=DEVICE,
+        persist=True,  # Penting: mempertahankan ID antar frame
+        tracker="botsort.yaml", # Tracker bawaan YOLO
+        verbose=False,
+    )
+
+    current_time = time.time()
     
-    # Inisialisasi ESP32 & Live Stream
+    # 1. Siapkan & Gambar ROI Polygon
+    abs_roi_points = []
+    if sys_roi_points and len(sys_roi_points) >= 3:
+        frame_h, frame_w = frame.shape[:2]
+        for pt in sys_roi_points:
+            abs_roi_points.append([int(pt[0] * frame_w), int(pt[1] * frame_h)])
+
+        abs_roi_pts_np = np.array(abs_roi_points, np.int32).reshape((-1, 1, 2))
+        cv2.polylines(frame, [abs_roi_pts_np], isClosed=True, color=(0, 255, 0), thickness=2)
+        cv2.putText(frame, "ACTIVE ROI", (abs_roi_points[0][0], max(20, abs_roi_points[0][1] - 10)),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+    is_someone_in_roi = False
+    global_status_text = "AMAN"
+    global_status_color = (0, 255, 0)
+    all_detected_classes = set()
+
+    # 2. Grouping bounding boxes per-orang
+    groups = group_boxes_by_person(results[0].boxes, names) if results[0].boxes else []
+    seen_track_ids = set()
+
+    for g in groups:
+        x1, y1, x2, y2 = g['rect']
+        classes = g['classes']
+        all_detected_classes.update(classes)
+        
+        main_track_id = min(g['track_ids']) if g['track_ids'] else None
+        
+        # Cek apakah grup ini berada di dalam ROI
+        if abs_roi_points and len(abs_roi_points) >= 3:
+            cx, cy = (x1 + x2) // 2, y2 - int((y2 - y1) * 0.1)
+            if cv2.pointPolygonTest(np.array(abs_roi_points, np.int32), (cx, cy), False) >= 0:
+                is_someone_in_roi = True
+
+        # Tentukan status kebersihan untuk grup/orang ini
+        person_status = "safe"
+        if "without_mask_hairnet" in classes:
+            person_status = "no_both"
+        elif "with_mask" in classes and "with_hairnet" in classes:
+            person_status = "safe"
+        elif "with_mask" in classes:
+            person_status = "no_hairnet"
+        elif "with_hairnet" in classes:
+            person_status = "no_mask"
+
+        # Tentukan warna box
+        color = (0, 255, 0) if person_status == "safe" else (0, 0, 255)
+        if person_status in ["no_hairnet", "no_mask"]:
+            color = (0, 255, 255) # Kuning untuk pelanggaran parsial
+
+        # Gambar box
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+        label_text = f"ID:{main_track_id if main_track_id else '?'} | " + ",".join(classes)
+        (w, h), _ = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)
+        cv2.rectangle(frame, (x1, y1 - 25), (x1 + w, y1), color, -1)
+        cv2.putText(frame, label_text, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
+
+        # Update global status untuk overlay teks
+        if person_status == "no_both":
+            global_status_text = "PELANGGARAN!"
+            global_status_color = (0, 0, 255)
+        elif person_status != "safe" and global_status_text == "AMAN":
+            global_status_text = "PERHATIAN (Tidak Lengkap)"
+            global_status_color = (0, 255, 255)
+
+        # 3. Logika Stateful Debouncing (Hanya jalan jika ada ID)
+        if main_track_id is not None:
+            seen_track_ids.add(main_track_id)
+            
+            # Inisialisasi memori untuk ID baru
+            if main_track_id not in active_trackers:
+                active_trackers[main_track_id] = {
+                    "status": "safe",
+                    "violation_start": 0,
+                    "safe_start": 0,
+                    "last_buzz_time": 0,
+                    "last_log_time": 0,
+                    "last_seen": current_time
+                }
+                
+            tracker = active_trackers[main_track_id]
+            tracker["last_seen"] = current_time
+
+            if person_status != "safe":
+                tracker["safe_start"] = 0
+                
+                # Jika sebelumnya aman, ini awal pelanggaran baru
+                if tracker["status"] == "safe":
+                    tracker["status"] = person_status
+                    tracker["violation_start"] = current_time
+                    # Reset timer agar langsung trigger
+                    tracker["last_buzz_time"] = 0
+                    tracker["last_log_time"] = 0
+                
+                # SMOOTHING: Harus konsisten melanggar selama 1 detik penuh
+                if current_time - tracker["violation_start"] >= 1.0:
+                    
+                    # A. BUZZER (Diulang setiap 30 detik jika bandel)
+                    if current_time - tracker["last_buzz_time"] >= 30:
+                        if sys_settings["esp32_buzzer_active"]:
+                            esp32_serial.trigger_buzzer()
+                        tracker["last_buzz_time"] = current_time
+                        
+                    # B. LOG & TELEGRAM (Hanya 1x per insiden, cooldown 5 menit)
+                    if current_time - tracker["last_log_time"] >= 300:
+                        avg_conf = sum(g['confs']) / max(len(g['confs']), 1)
+                        # Jalankan background thread
+                        thread = threading.Thread(
+                            target=process_violation_async,
+                            args=(frame.copy(), person_status, avg_conf,
+                                  False, # trigger_buzzer=False karena sudah di atas
+                                  sys_settings["telegram_bot_active"],
+                                  sys_settings["log_enabled"])
+                        )
+                        thread.daemon = True
+                        thread.start()
+                        tracker["last_log_time"] = current_time
+            else:
+                # Pekerja sudah pakai perlengkapan dengan benar
+                if tracker["safe_start"] == 0:
+                    tracker["safe_start"] = current_time
+                    
+                # SMOOTHING: Harus konsisten aman selama 2.5 detik untuk mereset pelanggaran
+                # (Mencegah reset akibat berkedip/flicker ke status aman sedetik)
+                if current_time - tracker["safe_start"] >= 2.5:
+                    tracker["status"] = "safe"
+                    tracker["violation_start"] = 0
+
+    # 4. Garbage Collection: Hapus ID yang sudah out-of-frame > 5 detik
+    for tid in list(active_trackers.keys()):
+        if current_time - active_trackers[tid]["last_seen"] > 5.0:
+            del active_trackers[tid]
+
+    # --- Skenario Dynamic ROI (Meninggalkan Pos) ---
+    if len(groups) == 0:
+        global_status_text = "TIDAK TERDETEKSI"
+        global_status_color = (128, 128, 128)
+
+    if abs_roi_points and len(abs_roi_points) >= 3:
+        if is_someone_in_roi:
+            roi_empty_start_time = None
+        else:
+            if roi_empty_start_time is None:
+                roi_empty_start_time = current_time
+
+            elapsed_empty = current_time - roi_empty_start_time
+            timer_limit = sys_settings["empty_post_timer"]
+
+            if elapsed_empty >= timer_limit:
+                global_status_text = "POS KOSONG!"
+                global_status_color = (0, 165, 255)
+
+                if current_time - last_log_time_left_post > 30: # 30s debounce khusus pos kosong
+                    last_log_time_left_post = current_time
+                    thread = threading.Thread(
+                        target=process_violation_async,
+                        args=(frame.copy(), "left_post", 1.0,
+                              sys_settings["esp32_buzzer_active"],
+                              sys_settings["telegram_bot_active"],
+                              sys_settings["log_enabled"])
+                    )
+                    thread.daemon = True
+                    thread.start()
+            elif elapsed_empty > 0:
+                global_status_text = f"POS KOSONG... {timer_limit - int(elapsed_empty)}s"
+                global_status_color = (0, 255, 255)
+
+    # Draw global status overlay
+    actual_h, actual_w = frame.shape[:2]
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (0, 0), (320, 100), (0, 0, 0), -1)
+
+    (tw, th), _ = cv2.getTextSize(global_status_text, cv2.FONT_HERSHEY_DUPLEX, 1.2, 3)
+    status_x = (actual_w - tw) // 2
+    cv2.rectangle(overlay, (status_x - 20, 10), (status_x + tw + 20, 60), global_status_color, -1)
+    cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
+
+    cv2.putText(frame, global_status_text, (status_x, 45), cv2.FONT_HERSHEY_DUPLEX, 1.2,
+                (255, 255, 255) if global_status_color != (0, 255, 255) else (0, 0, 0), 3)
+
+    num_dets = len(groups)
+    cv2.putText(frame, f"Orang : {num_dets}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+    cv2.putText(frame, f"Tracked : {len(active_trackers)}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+
+    return frame, all_detected_classes, global_status_text, global_status_color, is_someone_in_roi
+
+
+def process_frame_for_websocket(frame):
+    """Callback untuk WebSocket"""
+    annotated_frame, detected_classes, status_text, status_color, is_someone_in_roi = process_single_frame(frame)
+
+    ret, buffer = cv2.imencode('.jpg', annotated_frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+    frame_b64 = ""
+    if ret:
+        frame_b64 = base64.b64encode(buffer.tobytes()).decode('utf-8')
+
+    detections = [{"class": c, "safe": c in ["with_mask", "with_hairnet"]} for c in detected_classes]
+
+    return {
+        "annotated_frame": frame_b64,
+        "detections": detections,
+        "status": status_text,
+        "roi_occupied": is_someone_in_roi,
+    }
+
+
+def run_local():
+    global model, names
+
+    print("=" * 60)
+    print("🍳 SMART KITCHEN HYGIENE DETECTION - MODE LOKAL")
+    print("=" * 60)
+
     print("\n📡 Mempersiapkan modul integrasi...")
-    esp32_serial.init_serial()
+    esp32_serial.init()
     stream_server.run_in_background()
-    
-    # Load model
+
     print(f"\n📦 Loading model: {MODEL_PATH} on device {DEVICE.upper()}")
     try:
         model = YOLO(MODEL_PATH)
         names = model.names
         print(f"✅ Model loaded ({len(names)} classes)")
-        print(f"   Classes: {list(names.values())}")
     except Exception as e:
         print(f"❌ Failed to load model: {e}")
-        print(f"   Pastikan file '{MODEL_PATH}' ada di folder yang sama")
         return
-        
-    # Warmup model (menghindari lag pada frame pertama)
+
     print("\n🔥 Warming up model...")
     dummy_frame = np.zeros((FRAME_HEIGHT, FRAME_WIDTH, 3), dtype=np.uint8)
     model.predict(source=dummy_frame, imgsz=IMG_SIZE, device=DEVICE, verbose=False)
-    
-    # Buka webcam
+
     print(f"\n📷 Opening webcam (index {WEBCAM_INDEX})...")
     cap = cv2.VideoCapture(WEBCAM_INDEX, cv2.CAP_DSHOW)
-    
+
     if not cap.isOpened():
         print(f"❌ Gagal buka webcam index {WEBCAM_INDEX}")
-        print("   Coba ganti WEBCAM_INDEX ke 1, 2, atau 3")
         return
-    
-    # Set resolusi
+
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
     cap.set(cv2.CAP_PROP_FPS, 30)
-    
-    actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    print(f"✅ Webcam ready: {actual_w}x{actual_h}")
-    
-    # Variabel untuk recording
-    is_recording = False
-    video_writer = None
-    
-    # FPS calculation
-    fps_buffer = []
-    fps_buffer_size = 30
-    
-    print(f"\n🎬 Starting headless inference loop...")
-    print(f"   Tekan Ctrl+C di terminal ini untuk berhenti")
-    print()
-    
-    confidence = CONFIDENCE
-    frame_count = 0
-    start_time = time.time()
-    
-    # State untuk System Settings Dinamis
-    sys_settings = {
-        "telegram_bot_active": True,
-        "esp32_buzzer_active": True,
-        "ai_detection_active": True,
-        "log_enabled": True,
-        "ai_confidence_threshold": confidence,
-        "empty_post_timer": 5
-    }
-    
-    # State untuk Dynamic ROI
-    sys_roi_points = []
-    roi_empty_start_time = None
-    
-    last_settings_poll = 0
+
+    print(f"\n🎬 Starting headless inference loop (Tracker Active)...")
     
     while True:
-        # Wall-clock time untuk hitung FPS full loop
-        loop_start = time.time()
-        
-        # 0. Polling Settings dari DB setiap 10 detik
-        if loop_start - last_settings_poll > 10:
-            db_settings = supabase_logger.get_system_settings()
-            if db_settings:
-                sys_settings["telegram_bot_active"] = db_settings.get("telegram_enabled", True)
-                sys_settings["esp32_buzzer_active"] = db_settings.get("buzzer_enabled", True)
-                sys_settings["ai_detection_active"] = db_settings.get("ai_detection_active", True)
-                sys_settings["log_enabled"] = db_settings.get("log_enabled", True)
-                sys_settings["ai_confidence_threshold"] = float(db_settings.get("confidence_threshold", confidence))
-                sys_settings["empty_post_timer"] = int(db_settings.get("empty_post_timer", 5))
-                
-            # Tarik ROI config
-            db_roi = supabase_logger.get_roi_config()
-            if db_roi is not None:
-                sys_roi_points = db_roi
-            else:
-                sys_roi_points = []
-                
-            last_settings_poll = loop_start
-
         ret, frame = cap.read()
         if not ret:
-            print("❌ Failed to read frame")
             break
-            
-        frame_count += 1
-        
-        if sys_settings["ai_detection_active"]:
-            # Inference dengan Agnostic NMS dan IoU lebih ketat
-            results = model.predict(
-                source=frame,
-                conf=sys_settings["ai_confidence_threshold"],
-                iou=IOU_THRESHOLD,
-                agnostic_nms=AGNOSTIC_NMS,
-                imgsz=IMG_SIZE,
-                device=DEVICE,
-                verbose=False,
-            )
-            
-            # Siapkan koordinat absolut ROI untuk dikirim ke fungsi filtering dan penggambaran
-            abs_roi_points = []
-            if sys_roi_points and len(sys_roi_points) >= 3:
-                frame_h, frame_w = frame.shape[:2]
-                for pt in sys_roi_points:
-                    abs_roi_points.append([int(pt[0] * frame_w), int(pt[1] * frame_h)])
-                
-                # Gambar batas ROI di frame
-                abs_roi_pts_np = np.array(abs_roi_points, np.int32).reshape((-1, 1, 2))
-                cv2.polylines(frame, [abs_roi_pts_np], isClosed=True, color=(0, 255, 0), thickness=2)
-                cv2.putText(frame, "ACTIVE ROI ZONE", (abs_roi_points[0][0], max(20, abs_roi_points[0][1] - 10)),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-            
-            # Gambar Bounding Box Custom & Cek ROI
-            detected_classes, is_someone_in_roi = draw_custom_boxes(frame, results, names, abs_roi_points)
-            
-            # Tentukan Status Hygiene Normal
-            status_text, status_color = get_hygiene_status(detected_classes)
 
-            # --- Skenario Dynamic ROI (Meninggalkan Pos) ---
-            if abs_roi_points and len(abs_roi_points) >= 3:
-                if is_someone_in_roi:
-                    # Posisi terjaga, reset timer
-                    roi_empty_start_time = None
-                    if status_text == "TIDAK TERDETEKSI":
-                        status_text = "POS TERISI"
-                        status_color = (0, 255, 0)
-                else:
-                    # Posisi kosong, mulai atau lanjut timer
-                    if roi_empty_start_time is None:
-                        roi_empty_start_time = time.time()
-                    
-                    elapsed_empty = time.time() - roi_empty_start_time
-                    timer_limit = sys_settings["empty_post_timer"]
-                    
-                    if elapsed_empty >= timer_limit:
-                        # Timer mencapai batas waktu, Picu pelanggaran Meninggalkan Pos
-                        status_text = "POS KOSONG!"
-                        status_color = (0, 165, 255) # Orange warna peringatan
-                        
-                        current_time = time.time()
-                        if current_time - last_log_time.get("left_post", 0) > LOG_DEBOUNCE_SECONDS:
-                            last_log_time["left_post"] = current_time
-                            
-                            thread = threading.Thread(
-                                target=process_violation_async, 
-                                args=(
-                                    frame.copy(), 
-                                    "left_post", 
-                                    1.0, # Confidence 100% untuk Pos Kosong
-                                    sys_settings["esp32_buzzer_active"], 
-                                    sys_settings["telegram_bot_active"],
-                                    sys_settings["log_enabled"]
-                                )
-                            )
-                            thread.daemon = True
-                            thread.start()
-                    elif elapsed_empty > 0:
-                        # Tampilkan hitung mundur di layar
-                        status_text = f"POS KOSONG... {timer_limit - int(elapsed_empty)}s"
-                        status_color = (0, 255, 255) # Kuning
-        else:
-            # Bypass AI (Hanya Kamera CCTV Biasa)
-            results = None
-            detected_classes = set()
-            status_text, status_color = "CCTV MODE (AI MATI)", (255, 255, 255)
-            
-        # Cek Pelanggaran & Trigger Upload (Debounced)
-        if "PELANGGARAN" in status_text or "PERHATIAN" in status_text:
-            violation_type = None
-            if "without_mask_hairnet" in detected_classes:
-                violation_type = "no_both"
-            elif "with_mask" in detected_classes and "with_hairnet" not in detected_classes:
-                violation_type = "no_hairnet"
-            elif "with_hairnet" in detected_classes and "with_mask" not in detected_classes:
-                violation_type = "no_mask"
-            
-            # Jika ada pelanggaran yang spesifik
-            if violation_type:
-                current_time = time.time()
-                # Cek apakah sudah melewati batas waktu debounce
-                if current_time - last_log_time.get(violation_type, 0) > LOG_DEBOUNCE_SECONDS:
-                    last_log_time[violation_type] = current_time
-                    
-                    # Ambil confidence rata-rata deteksi sebagai metadata
-                    avg_conf = sum([float(box.conf[0]) for box in results[0].boxes]) / max(len(results[0].boxes), 1)
-                    
-                    # Jalankan upload di background thread agar tidak bikin kamera lag
-                    thread = threading.Thread(
-                        target=process_violation_async, 
-                        args=(
-                            frame.copy(), 
-                            violation_type, 
-                            avg_conf, 
-                            sys_settings["esp32_buzzer_active"], 
-                            sys_settings["telegram_bot_active"],
-                            sys_settings["log_enabled"]
-                        )
-                    )
-                    thread.daemon = True
-                    thread.start()
+        annotated_frame, _, _, _, _ = process_single_frame(frame)
+        stream_server.update_frame(annotated_frame)
 
-        # Hitung FPS
-        loop_time = time.time() - loop_start
-        fps = 1 / loop_time if loop_time > 0 else 0
-        fps_buffer.append(fps)
-        if len(fps_buffer) > fps_buffer_size:
-            fps_buffer.pop(0)
-        avg_fps = sum(fps_buffer) / len(fps_buffer)
-        
-        # Background semi-transparan untuk Info Panel (Kiri Atas)
-        overlay = frame.copy()
-        cv2.rectangle(overlay, (0, 0), (320, 100), (0, 0, 0), -1)
-        
-        # Background Panel Status Besar (Atas Tengah)
-        (tw, th), _ = cv2.getTextSize(status_text, cv2.FONT_HERSHEY_DUPLEX, 1.2, 3)
-        status_x = (actual_w - tw) // 2
-        cv2.rectangle(overlay, (status_x - 20, 10), (status_x + tw + 20, 60), status_color, -1)
-        cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
-        
-        # Tulis Text Status Besar
-        cv2.putText(frame, status_text, (status_x, 45), cv2.FONT_HERSHEY_DUPLEX, 1.2, (255, 255, 255) if status_color != (0, 255, 255) else (0,0,0), 3)
-        
-        # UPDATE FRAME KE SERVER LIVE STREAM
-        stream_server.update_frame(frame)
-        
-        # Info Panel Teks
-        cv2.putText(frame, f"FPS : {avg_fps:.1f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        cv2.putText(frame, f"Conf: {sys_settings['ai_confidence_threshold']:.2f}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-        cv2.putText(frame, f"Tol : {sys_settings['empty_post_timer']}s", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
-        
-        num_dets = len(results[0].boxes) if results else 0
-        cv2.putText(frame, f"Det : {num_dets}", (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        
-        if is_recording:
-            cv2.circle(frame, (actual_w - 40, 40), 10, (0, 0, 255), -1)
-            cv2.putText(frame, "REC", (actual_w - 90, 47), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-        
-        # Tulis ke video jika recording
-        if is_recording and video_writer is not None:
-            video_writer.write(frame)
-        
-        # Handle interupsi manual (Ctrl+C di terminal)
-        # cv2.imshow dan waitKey dihapus agar berjalan murni di background (Headless)
-        # Kamera akan sepenuhnya ditampilkan di Website.
-    
-    # Cleanup
-    if video_writer is not None:
-        video_writer.release()
     cap.release()
-    
-    # Summary
-    elapsed = time.time() - start_time
-    print(f"\n{'=' * 60}")
-    print(f"📊 SESSION SUMMARY")
-    print(f"{'=' * 60}")
-    print(f"   Total frames     : {frame_count}")
-    print(f"   Total time       : {elapsed:.1f}s")
-    print(f"   Average FPS      : {frame_count / elapsed:.2f}")
-    print(f"   Output folder    : {OUTPUT_DIR.absolute()}")
-    print(f"{'=' * 60}")
+
+
+def run_cloud():
+    global model, names
+
+    print("=" * 60)
+    print("☁️ SMART KITCHEN HYGIENE DETECTION - MODE CLOUD")
+    print("=" * 60)
+
+    print("\n📡 Mempersiapkan modul integrasi...")
+    esp32_serial.init()
+
+    print(f"\n📦 Loading model: {MODEL_PATH} on device {DEVICE.upper()}")
+    try:
+        model = YOLO(MODEL_PATH)
+        names = model.names
+    except Exception as e:
+        print(f"❌ Failed to load model: {e}")
+        return
+
+    print("\n🔥 Warming up model...")
+    dummy_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    model.predict(source=dummy_frame, imgsz=IMG_SIZE, device=DEVICE, verbose=False)
+
+    stream_server.set_process_callback(process_frame_for_websocket)
+
+    print("\n🚀 AI Engine siap menerima frame via WebSocket!")
+    stream_server.start_server()
 
 
 if __name__ == "__main__":
-    main()
+    print(f"\n🔧 Deploy Mode: {DEPLOY_MODE.upper()}")
+
+    if DEPLOY_MODE == "cloud":
+        run_cloud()
+    else:
+        run_local()

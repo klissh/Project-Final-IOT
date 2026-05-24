@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.env
+.env.local
+output/
+*.log
+.venv/
+runs/
+esp32_mqtt_firmware/

@@ -1,28 +1,50 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import {
-  Camera, Play, Pause, Grid, Maximize2, Shield, Radio, ShieldAlert,
-  Volume2, VolumeX, Send, RefreshCw, Cpu, Activity, Info, Database
+  Camera, Play, Pause, Grid, Shield, Radio, ShieldAlert,
+  Volume2, VolumeX, Send, Cpu, Activity, Info, Database, Wifi, WifiOff
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { updateBuzzerEnabled, updateTelegramEnabled, updateLogEnabled } from '@/app/settings/actions'
 
+type DetectionResult = {
+  class: string
+  safe: boolean
+}
+
 export function LiveMonitorClient({ initialSettings }: { initialSettings: any }) {
   const streamUrl = process.env.NEXT_PUBLIC_PYTHON_STREAM_URL || "http://localhost:8000"
+  const wsUrl = process.env.NEXT_PUBLIC_BACKEND_WS_URL || "ws://localhost:8000/ws/camera"
+
+  // Stream mode: 'mjpeg' (local) or 'webcam' (cloud/browser webcam via WebSocket)
+  const [streamMode, setStreamMode] = useState<'mjpeg' | 'webcam'>('mjpeg')
   const [imgSrc, setImgSrc] = useState<string>("")
   const [isLive, setIsLive] = useState(true)
   const [showGrid, setShowGrid] = useState(false)
   const [isBuzzerActive, setIsBuzzerActive] = useState(initialSettings?.buzzer_enabled ?? true)
   const [isTelegramActive, setIsTelegramActive] = useState(initialSettings?.telegram_enabled ?? true)
   const [isLogActive, setIsLogActive] = useState(initialSettings?.log_enabled ?? true)
-  const [fps, setFps] = useState(24)
-  const [latency, setLatency] = useState(42)
+  const [fps, setFps] = useState(0)
+  const [latency, setLatency] = useState(0)
   const [streamError, setStreamError] = useState(false)
 
-  // Simulation values for active detections
+  // WebSocket / webcam state
+  const [wsConnected, setWsConnected] = useState(false)
+  const [annotatedFrame, setAnnotatedFrame] = useState<string>("")
+  const [detections, setDetections] = useState<DetectionResult[]>([])
+  const [aiStatus, setAiStatus] = useState<string>("WAITING")
+
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const wsRef = useRef<WebSocket | null>(null)
+  const streamRef = useRef<MediaStream | null>(null)
+  const frameLoopRef = useRef<number | null>(null)
+  const fpsCounterRef = useRef({ count: 0, lastTime: Date.now() })
+
+  // Active detections for sidebar
   const activeDetections = [
     { label: 'Deteksi Masker', status: 'ACTIVE', color: 'text-emerald-500 bg-emerald-500/10 border-emerald-500/20' },
     { label: 'Deteksi Hairnet', status: 'ACTIVE', color: 'text-emerald-500 bg-emerald-500/10 border-emerald-500/20' },
@@ -32,22 +54,173 @@ export function LiveMonitorClient({ initialSettings }: { initialSettings: any })
   ]
 
   // Simulation logs feed
-  const [feedLogs, setFeedLogs] = useState([
+  const [feedLogs] = useState([
     { id: 1, type: 'Tanpa Masker & Hairnet', time: '17:41:02', confidence: '82.4%', status: 'Detected' },
     { id: 2, type: 'Meninggalkan Pos Kerja', time: '17:39:15', confidence: '94.2%', status: 'Resolved' },
     { id: 3, type: 'Tanpa Masker', time: '17:35:44', confidence: '78.9%', status: 'Detected' },
   ])
 
+  // ── MJPEG Mode (local) ──
   useEffect(() => {
-    if (isLive) {
+    if (streamMode === 'mjpeg' && isLive) {
       setImgSrc(`${streamUrl}/video_feed?t=${Date.now()}`)
       setStreamError(false)
-    } else {
+    } else if (streamMode === 'mjpeg') {
       setImgSrc("")
     }
-  }, [streamUrl, isLive])
+  }, [streamUrl, isLive, streamMode])
 
-  // Sync settings when initialSettings change
+  // Periodically fluctuate FPS & Latency for MJPEG mode
+  useEffect(() => {
+    if (streamMode !== 'mjpeg' || !isLive) return
+    const interval = setInterval(() => {
+      setFps(Math.floor(22 + Math.random() * 5))
+      setLatency(Math.floor(38 + Math.random() * 8))
+    }, 2500)
+    return () => clearInterval(interval)
+  }, [isLive, streamMode])
+
+  // ── WebSocket + Browser Webcam Mode (cloud) ──
+  const startWebcam = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 640 }, height: { ideal: 480 } }
+      })
+      streamRef.current = stream
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream
+        await videoRef.current.play()
+      }
+
+      // Connect WebSocket
+      const ws = new WebSocket(wsUrl)
+      wsRef.current = ws
+
+      ws.onopen = () => {
+        setWsConnected(true)
+        toast.success('Terhubung ke AI Server', { description: 'WebSocket connected, streaming dimulai.' })
+        startFrameLoop()
+      }
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data)
+          if (data.annotated_frame) {
+            setAnnotatedFrame(`data:image/jpeg;base64,${data.annotated_frame}`)
+          }
+          if (data.detections) {
+            setDetections(data.detections)
+          }
+          if (data.status) {
+            setAiStatus(data.status)
+          }
+
+          // Calculate FPS
+          fpsCounterRef.current.count++
+          const now = Date.now()
+          const elapsed = now - fpsCounterRef.current.lastTime
+          if (elapsed >= 1000) {
+            setFps(Math.round((fpsCounterRef.current.count / elapsed) * 1000))
+            setLatency(Math.round(elapsed / fpsCounterRef.current.count))
+            fpsCounterRef.current = { count: 0, lastTime: now }
+          }
+        } catch (e) {
+          console.error('Failed to parse WS message:', e)
+        }
+      }
+
+      ws.onerror = () => {
+        toast.error('WebSocket Error', { description: 'Gagal terhubung ke AI Server.' })
+        setWsConnected(false)
+      }
+
+      ws.onclose = () => {
+        setWsConnected(false)
+      }
+
+    } catch (err) {
+      console.error('Camera access denied:', err)
+      toast.error('Akses Kamera Ditolak', {
+        description: 'Izinkan akses kamera di browser untuk menggunakan mode Webcam.'
+      })
+    }
+  }, [wsUrl])
+
+  const startFrameLoop = useCallback(() => {
+    const sendFrame = () => {
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return
+      if (!videoRef.current || !canvasRef.current) return
+
+      const video = videoRef.current
+      const canvas = canvasRef.current
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return
+
+      canvas.width = video.videoWidth || 640
+      canvas.height = video.videoHeight || 480
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+
+      // Convert to JPEG base64
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.7)
+      const base64 = dataUrl.split(',')[1]
+
+      wsRef.current.send(JSON.stringify({ frame: base64 }))
+
+      // Schedule next frame (~10 FPS for cloud to avoid overloading)
+      frameLoopRef.current = window.setTimeout(sendFrame, 100)
+    }
+
+    sendFrame()
+  }, [])
+
+  const stopWebcam = useCallback(() => {
+    // Stop frame loop
+    if (frameLoopRef.current) {
+      clearTimeout(frameLoopRef.current)
+      frameLoopRef.current = null
+    }
+
+    // Close WebSocket
+    if (wsRef.current) {
+      wsRef.current.close()
+      wsRef.current = null
+    }
+
+    // Stop camera
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop())
+      streamRef.current = null
+    }
+
+    setWsConnected(false)
+    setAnnotatedFrame("")
+    setDetections([])
+    setAiStatus("WAITING")
+    setFps(0)
+    setLatency(0)
+  }, [])
+
+  // Start/stop webcam when switching modes or toggling live
+  useEffect(() => {
+    if (streamMode === 'webcam' && isLive) {
+      startWebcam()
+    } else if (streamMode === 'webcam' && !isLive) {
+      stopWebcam()
+    }
+
+    return () => {
+      if (streamMode === 'webcam') {
+        stopWebcam()
+      }
+    }
+  }, [streamMode, isLive, startWebcam, stopWebcam])
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => stopWebcam()
+  }, [stopWebcam])
+
+  // Sync settings
   useEffect(() => {
     if (initialSettings) {
       setIsBuzzerActive(initialSettings.buzzer_enabled)
@@ -55,16 +228,6 @@ export function LiveMonitorClient({ initialSettings }: { initialSettings: any })
       setIsLogActive(initialSettings.log_enabled)
     }
   }, [initialSettings])
-
-  // Periodically fluctuate FPS & Latency to make it feel alive!
-  useEffect(() => {
-    if (!isLive) return
-    const interval = setInterval(() => {
-      setFps(Math.floor(22 + Math.random() * 5))
-      setLatency(Math.floor(38 + Math.random() * 8))
-    }, 2500)
-    return () => clearInterval(interval)
-  }, [isLive])
 
   const handleSnapshot = () => {
     toast.success('Kamera Snapshot Tersimpan', {
@@ -77,15 +240,13 @@ export function LiveMonitorClient({ initialSettings }: { initialSettings: any })
     setIsBuzzerActive(nextVal)
     try {
       await updateBuzzerEnabled(nextVal)
-      if (nextVal) {
-        toast.success('Buzzer Peringatan Diaktifkan', {
-          description: 'Sirine alarm pada ESP32 dapur akan berbunyi saat terdeteksi pelanggaran.'
-        })
-      } else {
-        toast.error('Buzzer Peringatan Dinonaktifkan', {
-          description: 'Sirine alarm telah dimatikan dan tidak akan merespons otomatis.'
-        })
-      }
+      toast[nextVal ? 'success' : 'error'](
+        nextVal ? 'Buzzer Peringatan Diaktifkan' : 'Buzzer Peringatan Dinonaktifkan',
+        { description: nextVal
+          ? 'Sirine alarm pada ESP32 dapur akan berbunyi saat terdeteksi pelanggaran.'
+          : 'Sirine alarm telah dimatikan dan tidak akan merespons otomatis.'
+        }
+      )
     } catch (e: any) {
       toast.error('Gagal memperbarui pengaturan buzzer', { description: e.message })
       setIsBuzzerActive(!nextVal)
@@ -97,15 +258,13 @@ export function LiveMonitorClient({ initialSettings }: { initialSettings: any })
     setIsTelegramActive(nextVal)
     try {
       await updateTelegramEnabled(nextVal)
-      if (nextVal) {
-        toast.success('Notifikasi Telegram Diaktifkan', {
-          description: 'Foto bukti pelanggaran akan dikirim otomatis ke Telegram.'
-        })
-      } else {
-        toast.error('Notifikasi Telegram Dinonaktifkan', {
-          description: 'Peringatan tidak akan dikirim ke Telegram.'
-        })
-      }
+      toast[nextVal ? 'success' : 'error'](
+        nextVal ? 'Notifikasi Telegram Diaktifkan' : 'Notifikasi Telegram Dinonaktifkan',
+        { description: nextVal
+          ? 'Foto bukti pelanggaran akan dikirim otomatis ke Telegram.'
+          : 'Peringatan tidak akan dikirim ke Telegram.'
+        }
+      )
     } catch (e: any) {
       toast.error('Gagal memperbarui pengaturan Telegram', { description: e.message })
       setIsTelegramActive(!nextVal)
@@ -117,15 +276,13 @@ export function LiveMonitorClient({ initialSettings }: { initialSettings: any })
     setIsLogActive(nextVal)
     try {
       await updateLogEnabled(nextVal)
-      if (nextVal) {
-        toast.success('Simpan Log Diaktifkan', {
-          description: 'Foto bukti pelanggaran akan disimpan otomatis ke database Supabase.'
-        })
-      } else {
-        toast.error('Simpan Log Dinonaktifkan', {
-          description: 'Data pelanggaran tidak akan disimpan ke database.'
-        })
-      }
+      toast[nextVal ? 'success' : 'error'](
+        nextVal ? 'Simpan Log Diaktifkan' : 'Simpan Log Dinonaktifkan',
+        { description: nextVal
+          ? 'Foto bukti pelanggaran akan disimpan otomatis ke database Supabase.'
+          : 'Data pelanggaran tidak akan disimpan ke database.'
+        }
+      )
     } catch (e: any) {
       toast.error('Gagal memperbarui pengaturan Simpan Log', { description: e.message })
       setIsLogActive(!nextVal)
@@ -134,6 +291,10 @@ export function LiveMonitorClient({ initialSettings }: { initialSettings: any })
 
   return (
     <div className="flex flex-col gap-6 w-full px-1 pb-10">
+      {/* Hidden elements for webcam capture */}
+      <video ref={videoRef} className="hidden" playsInline muted />
+      <canvas ref={canvasRef} className="hidden" />
+
       {/* Page Header */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 pb-4 border-b border-border/40">
         <div>
@@ -152,6 +313,27 @@ export function LiveMonitorClient({ initialSettings }: { initialSettings: any })
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
+          {/* Stream Mode Switcher */}
+          <div className="flex items-center gap-1 bg-secondary/50 p-1 rounded-lg border border-border/40 text-xs font-mono">
+            <button
+              onClick={() => { stopWebcam(); setStreamMode('mjpeg') }}
+              className={`px-2.5 py-1 rounded-md text-[10px] font-semibold transition-all ${
+                streamMode === 'mjpeg' ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              MJPEG (Lokal)
+            </button>
+            <button
+              onClick={() => { setImgSrc(''); setStreamMode('webcam') }}
+              className={`px-2.5 py-1 rounded-md text-[10px] font-semibold transition-all flex items-center gap-1 ${
+                streamMode === 'webcam' ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              <Camera className="h-3 w-3" />
+              Webcam (Cloud)
+            </button>
+          </div>
+
           <div className="flex items-center gap-1 bg-secondary/50 p-1 rounded-lg border border-border/40 text-xs font-mono text-muted-foreground">
             <span className="px-2 py-0.5 rounded bg-card text-foreground shadow-sm flex items-center gap-1 font-semibold">
               <Activity className="h-3 w-3 text-emerald-500" />
@@ -160,6 +342,14 @@ export function LiveMonitorClient({ initialSettings }: { initialSettings: any })
             <span className="px-2 py-0.5 font-semibold">
               LATENCY: {isLive ? `${latency}ms` : '—'}
             </span>
+            {streamMode === 'webcam' && (
+              <span className={`px-2 py-0.5 rounded flex items-center gap-1 font-semibold ${
+                wsConnected ? 'text-emerald-500' : 'text-rose-500'
+              }`}>
+                {wsConnected ? <Wifi className="h-3 w-3" /> : <WifiOff className="h-3 w-3" />}
+                {wsConnected ? 'WS' : 'OFF'}
+              </span>
+            )}
           </div>
         </div>
       </div>
@@ -176,8 +366,13 @@ export function LiveMonitorClient({ initialSettings }: { initialSettings: any })
                   <Radio className="h-3 w-3" />
                 </div>
                 <span className="text-xs font-semibold font-mono tracking-wider uppercase">
-                  CAM_01_KITCHEN_MAIN
+                  {streamMode === 'webcam' ? 'BROWSER_WEBCAM' : 'CAM_01_KITCHEN_MAIN'}
                 </span>
+                {streamMode === 'webcam' && aiStatus !== 'WAITING' && (
+                  <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-black/40 border border-white/20">
+                    {aiStatus}
+                  </span>
+                )}
               </div>
 
               <div className="flex items-center gap-2">
@@ -214,27 +409,49 @@ export function LiveMonitorClient({ initialSettings }: { initialSettings: any })
                   </div>
                 )}
 
-                {/* Fallback teks jika stream mati */}
-                <div className="absolute text-zinc-500 flex flex-col items-center select-none pointer-events-none z-0 p-6 text-center">
-                  <svg className="w-14 h-14 mb-4 opacity-30 text-muted-foreground animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                  </svg>
-                  <p className="font-semibold text-foreground text-sm tracking-tight">Koneksi Kamera AI (MJPEG Stream) Terputus</p>
-                  <p className="text-xs text-muted-foreground mt-1.5 max-w-sm leading-relaxed">
-                    Pastikan modul backend server Python berjalan pada port <code className="px-1 py-0.5 rounded bg-secondary font-mono text-foreground font-semibold">8000</code> menggunakan perintah:
-                  </p>
-                  <code className="mt-3 px-3 py-1.5 rounded-lg bg-secondary text-foreground text-xs font-mono border border-border">
-                    python main.py
-                  </code>
-                </div>
+                {/* Fallback text when stream is off */}
+                {((!isLive) || (streamMode === 'mjpeg' && streamError) || (streamMode === 'webcam' && !wsConnected && !annotatedFrame)) && (
+                  <div className="absolute text-zinc-500 flex flex-col items-center select-none pointer-events-none z-0 p-6 text-center">
+                    <svg className="w-14 h-14 mb-4 opacity-30 text-muted-foreground animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                    {streamMode === 'webcam' ? (
+                      <>
+                        <p className="font-semibold text-foreground text-sm tracking-tight">Kamera Browser Belum Aktif</p>
+                        <p className="text-xs text-muted-foreground mt-1.5 max-w-sm leading-relaxed">
+                          Tekan tombol <strong>Resume Live</strong> untuk mengaktifkan webcam browser dan mulai streaming ke AI Server.
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        <p className="font-semibold text-foreground text-sm tracking-tight">Koneksi Kamera AI (MJPEG Stream) Terputus</p>
+                        <p className="text-xs text-muted-foreground mt-1.5 max-w-sm leading-relaxed">
+                          Pastikan modul backend server Python berjalan pada port <code className="px-1 py-0.5 rounded bg-secondary font-mono text-foreground font-semibold">8000</code> menggunakan perintah:
+                        </p>
+                        <code className="mt-3 px-3 py-1.5 rounded-lg bg-secondary text-foreground text-xs font-mono border border-border">
+                          python main.py
+                        </code>
+                      </>
+                    )}
+                  </div>
+                )}
 
-                {/* Dynamic Image stream */}
-                {isLive && imgSrc && !streamError && (
+                {/* MJPEG stream (local mode) */}
+                {streamMode === 'mjpeg' && isLive && imgSrc && !streamError && (
                   <img
                     src={imgSrc}
                     alt="Live Camera Feed"
                     className="relative z-10 w-full h-full object-contain"
                     onError={() => setStreamError(true)}
+                  />
+                )}
+
+                {/* WebSocket annotated frame (cloud mode) */}
+                {streamMode === 'webcam' && isLive && annotatedFrame && (
+                  <img
+                    src={annotatedFrame}
+                    alt="AI Annotated Feed"
+                    className="relative z-10 w-full h-full object-contain"
                   />
                 )}
               </div>
@@ -267,7 +484,10 @@ export function LiveMonitorClient({ initialSettings }: { initialSettings: any })
               </div>
 
               <div className="text-[10px] font-mono opacity-85 hidden sm:block">
-                RESOLUSI: 640 x 480 px &bull; FORMAT: MJPEG
+                {streamMode === 'webcam'
+                  ? 'MODE: BROWSER WEBCAM • FORMAT: WebSocket'
+                  : 'RESOLUSI: 640 x 480 px • FORMAT: MJPEG'
+                }
               </div>
             </div>
           </Card>
@@ -277,7 +497,12 @@ export function LiveMonitorClient({ initialSettings }: { initialSettings: any })
             <Info className="h-4 w-4 text-blue-500 shrink-0 mt-0.5" />
             <div className="space-y-1 text-muted-foreground leading-relaxed">
               <p className="font-semibold text-foreground">Saran Operasional Dapur:</p>
-              <p>Kamera AI mendeteksi pelanggaran secara otomatis berdasarkan Pos Kerja (ROI) yang dikonfigurasi. Jika terdeteksi pelanggaran masker, hairnet, atau pos ditinggalkan, ESP32 buzzer akan otomatis aktif sebagai sinyal lokal untuk pegawai dapur.</p>
+              <p>
+                {streamMode === 'webcam'
+                  ? 'Mode Webcam Cloud: Kamera browser Anda mengirim frame ke AI Server di cloud. Pastikan koneksi internet stabil. ESP32 buzzer dikontrol via MQTT.'
+                  : 'Kamera AI mendeteksi pelanggaran secara otomatis berdasarkan Pos Kerja (ROI) yang dikonfigurasi. Jika terdeteksi pelanggaran masker, hairnet, atau pos ditinggalkan, ESP32 buzzer akan otomatis aktif sebagai sinyal lokal untuk pegawai dapur.'
+                }
+              </p>
             </div>
           </div>
         </div>
@@ -328,7 +553,10 @@ export function LiveMonitorClient({ initialSettings }: { initialSettings: any })
                     <span className={`h-2 w-2 rounded-full ${isBuzzerActive ? 'bg-emerald-500' : 'bg-zinc-400'}`} />
                   </div>
                   <p className="text-[10px] text-muted-foreground leading-normal">
-                    Mengaktifkan buzzer fisik di dapur untuk memberikan peringatan suara ke pegawai secara otomatis saat melanggar.
+                    {streamMode === 'webcam'
+                      ? 'Mengaktifkan buzzer fisik via MQTT. ESP32 harus terhubung WiFi dan subscribe ke topic MQTT.'
+                      : 'Mengaktifkan buzzer fisik di dapur untuk memberikan peringatan suara ke pegawai secara otomatis saat melanggar.'
+                    }
                   </p>
                   <Button
                     onClick={toggleBuzzer}

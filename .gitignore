@@ -69,3 +69,7 @@ yarn-error.log*
 *.pem
 *.tsbuildinfo
 next-env.d.ts
+# Cloud Deploy Temp Folder
+hf-deploy/
+
+.venv/
