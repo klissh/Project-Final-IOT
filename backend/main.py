@@ -56,7 +56,7 @@ WEBCAM_INDEX = 0                 # 0 = webcam default. Coba 1, 2 jika multi-came
 CONFIDENCE = 0.4                 # Confidence threshold (0.0 - 1.0)
 IOU_THRESHOLD = 0.35             # IoU threshold untuk NMS
 AGNOSTIC_NMS = False             # Harus False agar box 'with_mask' & 'with_hairnet' bisa tumpang tindih di 1 wajah
-IMG_SIZE = 320                   # DITURUNKAN KE 320 AGAR INFERENCE CPU 3X LEBIH CEPAT
+IMG_SIZE = 640                   # Image size untuk inference
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 # Resolusi webcam
@@ -221,7 +221,7 @@ def process_single_frame(frame):
         imgsz=IMG_SIZE,
         device=DEVICE,
         persist=True,  # Penting: mempertahankan ID antar frame
-        tracker="bytetrack.yaml", # Menggunakan ByteTrack yang jauh lebih ringan dari BoT-SORT untuk CPU
+        tracker="botsort.yaml", # Tracker bawaan YOLO
         verbose=False,
     )
 
