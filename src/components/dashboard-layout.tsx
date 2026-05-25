@@ -91,7 +91,7 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
               }`}
           >
             <p className="text-sm font-bold leading-none text-foreground tracking-tight whitespace-nowrap">ArkaHygiene</p>
-            <p className="text-[10px] text-muted-foreground mt-0.5 font-mono whitespace-nowrap">Smart Kitchen</p>
+            <p className="text-[10px] text-muted-foreground mt-0.5 font-mono whitespace-nowrap">Smart Kitchen Surveillance</p>
           </div>
         </div>
 
@@ -111,8 +111,8 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
                 href={item.href}
                 title={collapsed ? item.name : undefined}
                 className={`group flex items-center rounded-lg h-10 w-full px-3 transition-colors duration-200 ${isActive
-                    ? 'bg-secondary text-foreground'
-                    : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground'
+                  ? 'bg-secondary text-foreground'
+                  : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground'
                   }`}
               >
                 <item.icon
