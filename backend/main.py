@@ -221,7 +221,7 @@ def process_single_frame(frame):
         imgsz=IMG_SIZE,
         device=DEVICE,
         persist=True,  # Penting: mempertahankan ID antar frame
-        tracker="botsort.yaml", # Tracker bawaan YOLO
+        tracker="bytetrack.yaml", # Menggunakan ByteTrack untuk mencegah warning GMC dari BoT-SORT
         verbose=False,
     )
 
