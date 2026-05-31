@@ -5,7 +5,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import {
   Camera, Play, Pause, Grid, Shield, Radio, ShieldAlert,
-  Volume2, VolumeX, Send, Cpu, Activity, Info, Database, Wifi, WifiOff
+  Volume2, VolumeX, Send, Cpu, Activity, Info, Database, Wifi, WifiOff, Loader2
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { updateBuzzerEnabled, updateTelegramEnabled, updateLogEnabled } from '@/app/settings/actions'
@@ -27,6 +27,10 @@ export function LiveMonitorClient({ initialSettings }: { initialSettings: any })
   const [isBuzzerActive, setIsBuzzerActive] = useState(initialSettings?.buzzer_enabled ?? true)
   const [isTelegramActive, setIsTelegramActive] = useState(initialSettings?.telegram_enabled ?? true)
   const [isLogActive, setIsLogActive] = useState(initialSettings?.log_enabled ?? true)
+  
+  const [isBuzzerLoading, setIsBuzzerLoading] = useState(false)
+  const [isTelegramLoading, setIsTelegramLoading] = useState(false)
+  const [isLogLoading, setIsLogLoading] = useState(false)
   const [fps, setFps] = useState(0)
   const [latency, setLatency] = useState(0)
   const [streamError, setStreamError] = useState(false)
@@ -252,10 +256,11 @@ export function LiveMonitorClient({ initialSettings }: { initialSettings: any })
   }
 
   const toggleBuzzer = async () => {
+    setIsBuzzerLoading(true)
     const nextVal = !isBuzzerActive
-    setIsBuzzerActive(nextVal)
     try {
       await updateBuzzerEnabled(nextVal)
+      setIsBuzzerActive(nextVal)
       toast[nextVal ? 'success' : 'error'](
         nextVal ? 'Buzzer Peringatan Diaktifkan' : 'Buzzer Peringatan Dinonaktifkan',
         { description: nextVal
@@ -265,15 +270,17 @@ export function LiveMonitorClient({ initialSettings }: { initialSettings: any })
       )
     } catch (e: any) {
       toast.error('Gagal memperbarui pengaturan buzzer', { description: e.message })
-      setIsBuzzerActive(!nextVal)
+    } finally {
+      setIsBuzzerLoading(false)
     }
   }
 
   const toggleTelegram = async () => {
+    setIsTelegramLoading(true)
     const nextVal = !isTelegramActive
-    setIsTelegramActive(nextVal)
     try {
       await updateTelegramEnabled(nextVal)
+      setIsTelegramActive(nextVal)
       toast[nextVal ? 'success' : 'error'](
         nextVal ? 'Notifikasi Telegram Diaktifkan' : 'Notifikasi Telegram Dinonaktifkan',
         { description: nextVal
@@ -283,15 +290,17 @@ export function LiveMonitorClient({ initialSettings }: { initialSettings: any })
       )
     } catch (e: any) {
       toast.error('Gagal memperbarui pengaturan Telegram', { description: e.message })
-      setIsTelegramActive(!nextVal)
+    } finally {
+      setIsTelegramLoading(false)
     }
   }
 
   const toggleLog = async () => {
+    setIsLogLoading(true)
     const nextVal = !isLogActive
-    setIsLogActive(nextVal)
     try {
       await updateLogEnabled(nextVal)
+      setIsLogActive(nextVal)
       toast[nextVal ? 'success' : 'error'](
         nextVal ? 'Simpan Log Diaktifkan' : 'Simpan Log Dinonaktifkan',
         { description: nextVal
@@ -300,8 +309,9 @@ export function LiveMonitorClient({ initialSettings }: { initialSettings: any })
         }
       )
     } catch (e: any) {
-      toast.error('Gagal memperbarui pengaturan Simpan Log', { description: e.message })
-      setIsLogActive(!nextVal)
+      toast.error('Gagal memperbarui pengaturan Log', { description: e.message })
+    } finally {
+      setIsLogLoading(false)
     }
   }
 
@@ -576,6 +586,7 @@ export function LiveMonitorClient({ initialSettings }: { initialSettings: any })
                   </p>
                   <Button
                     onClick={toggleBuzzer}
+                    disabled={isBuzzerLoading}
                     size="sm"
                     className={`w-full text-xs font-semibold h-8 mt-1 border transition-all ${
                       isBuzzerActive
@@ -583,7 +594,8 @@ export function LiveMonitorClient({ initialSettings }: { initialSettings: any })
                         : 'bg-card border-border text-foreground hover:bg-secondary'
                     }`}
                   >
-                    {isBuzzerActive ? 'Matikan Alarm Buzzer' : 'Aktifkan Alarm Buzzer'}
+                    {isBuzzerLoading && <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />}
+                    {isBuzzerLoading ? 'Menyimpan...' : (isBuzzerActive ? 'Matikan Alarm Buzzer' : 'Aktifkan Alarm Buzzer')}
                   </Button>
                 </div>
 
@@ -601,6 +613,7 @@ export function LiveMonitorClient({ initialSettings }: { initialSettings: any })
                   </p>
                   <Button
                     onClick={toggleTelegram}
+                    disabled={isTelegramLoading}
                     size="sm"
                     className={`w-full text-xs font-semibold h-8 mt-1 border transition-all ${
                       isTelegramActive
@@ -608,7 +621,8 @@ export function LiveMonitorClient({ initialSettings }: { initialSettings: any })
                         : 'bg-card border-border text-foreground hover:bg-secondary'
                     }`}
                   >
-                    {isTelegramActive ? 'Matikan Notifikasi Bot' : 'Aktifkan Notifikasi Bot'}
+                    {isTelegramLoading && <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />}
+                    {isTelegramLoading ? 'Menyimpan...' : (isTelegramActive ? 'Matikan Notifikasi Bot' : 'Aktifkan Notifikasi Bot')}
                   </Button>
                 </div>
 
@@ -626,6 +640,7 @@ export function LiveMonitorClient({ initialSettings }: { initialSettings: any })
                   </p>
                   <Button
                     onClick={toggleLog}
+                    disabled={isLogLoading}
                     size="sm"
                     className={`w-full text-xs font-semibold h-8 mt-1 border transition-all ${
                       isLogActive
@@ -633,7 +648,8 @@ export function LiveMonitorClient({ initialSettings }: { initialSettings: any })
                         : 'bg-card border-border text-foreground hover:bg-secondary'
                     }`}
                   >
-                    {isLogActive ? 'Matikan Simpan Log' : 'Aktifkan Simpan Log'}
+                    {isLogLoading && <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />}
+                    {isLogLoading ? 'Menyimpan...' : (isLogActive ? 'Matikan Simpan Log' : 'Aktifkan Simpan Log')}
                   </Button>
                 </div>
               </div>
