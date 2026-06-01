@@ -87,8 +87,8 @@ sys_settings = {
 }
 
 sys_roi_points = []
-roi_empty_start_time = None
-last_log_time_left_post = 0
+roi_empty_timers = {}
+roi_last_log_times = {}
 last_settings_poll = 0
 
 model = None
@@ -130,7 +130,7 @@ def process_violation_async(frame, violation_type, confidence, trigger_buzzer=Tr
     print(f"\n⚠️ Merekam pelanggaran: {violation_type} (conf: {confidence:.2f})")
 
     if trigger_buzzer:
-        esp32_serial.trigger_buzzer()
+        esp32_serial.trigger_buzzer(violation_type)
 
     if not log_enabled:
         if send_telegram:
@@ -203,9 +203,9 @@ def group_boxes_by_person(boxes, class_names):
 
 def process_single_frame(frame):
     """
-    Proses satu frame menggunakan YOLOv8 Tracking (BoT-SORT) + Stateful Debouncing.
+    Proses satu frame menggunakan YOLOv8 Tracking (ByteTrack) + Stateful Debouncing + Multi-ROI.
     """
-    global roi_empty_start_time, last_log_time_left_post, active_trackers
+    global roi_empty_timers, roi_last_log_times, active_trackers
 
     poll_settings()
 
@@ -227,19 +227,31 @@ def process_single_frame(frame):
 
     current_time = time.time()
     
-    # 1. Siapkan & Gambar ROI Polygon
-    abs_roi_points = []
-    if sys_roi_points and len(sys_roi_points) >= 3:
+    # 1. Siapkan & Gambar ROI Polygons
+    abs_roi_polygons = []
+    
+    # Deteksi apakah sys_roi_points adalah list dari polygons (depth 3) atau single polygon (depth 2)
+    if sys_roi_points and len(sys_roi_points) > 0:
+        if isinstance(sys_roi_points[0][0], (int, float)):
+            # Depth 2: single polygon, wrap in array
+            raw_polygons = [sys_roi_points]
+        else:
+            raw_polygons = sys_roi_points
+
         frame_h, frame_w = frame.shape[:2]
-        for pt in sys_roi_points:
-            abs_roi_points.append([int(pt[0] * frame_w), int(pt[1] * frame_h)])
+        
+        for p_idx, poly in enumerate(raw_polygons):
+            if len(poly) >= 3:
+                abs_poly = [[int(pt[0] * frame_w), int(pt[1] * frame_h)] for pt in poly]
+                abs_roi_polygons.append(abs_poly)
+                
+                abs_roi_pts_np = np.array(abs_poly, np.int32).reshape((-1, 1, 2))
+                cv2.polylines(frame, [abs_roi_pts_np], isClosed=True, color=(0, 255, 0), thickness=2)
+                cv2.putText(frame, f"POS {p_idx + 1}", (abs_poly[0][0], max(20, abs_poly[0][1] - 10)),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
-        abs_roi_pts_np = np.array(abs_roi_points, np.int32).reshape((-1, 1, 2))
-        cv2.polylines(frame, [abs_roi_pts_np], isClosed=True, color=(0, 255, 0), thickness=2)
-        cv2.putText(frame, "ACTIVE ROI", (abs_roi_points[0][0], max(20, abs_roi_points[0][1] - 10)),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-
-    is_someone_in_roi = False
+    is_someone_in_any_roi = False
+    roi_occupied_status = {i: False for i in range(len(abs_roi_polygons))}
     global_status_text = "AMAN"
     global_status_color = (0, 255, 0)
     all_detected_classes = set()
@@ -255,11 +267,13 @@ def process_single_frame(frame):
         
         main_track_id = min(g['track_ids']) if g['track_ids'] else None
         
-        # Cek apakah grup ini berada di dalam ROI
-        if abs_roi_points and len(abs_roi_points) >= 3:
+        # Cek apakah grup ini berada di dalam ROI mana pun
+        if len(abs_roi_polygons) > 0:
             cx, cy = (x1 + x2) // 2, y2 - int((y2 - y1) * 0.1)
-            if cv2.pointPolygonTest(np.array(abs_roi_points, np.int32), (cx, cy), False) >= 0:
-                is_someone_in_roi = True
+            for i, poly in enumerate(abs_roi_polygons):
+                if cv2.pointPolygonTest(np.array(poly, np.int32), (cx, cy), False) >= 0:
+                    roi_occupied_status[i] = True
+                    is_someone_in_any_roi = True
 
         # Tentukan status kebersihan untuk grup/orang ini
         person_status = "safe"
@@ -327,7 +341,7 @@ def process_single_frame(frame):
                     # A. BUZZER (Diulang setiap 30 detik jika bandel)
                     if current_time - tracker["last_buzz_time"] >= 30:
                         if sys_settings["esp32_buzzer_active"]:
-                            esp32_serial.trigger_buzzer()
+                            esp32_serial.trigger_buzzer(person_status)
                         tracker["last_buzz_time"] = current_time
                         
                     # B. LOG & TELEGRAM (Hanya 1x per insiden, cooldown 5 menit)
@@ -360,39 +374,48 @@ def process_single_frame(frame):
         if current_time - active_trackers[tid]["last_seen"] > 5.0:
             del active_trackers[tid]
 
-    # --- Skenario Dynamic ROI (Meninggalkan Pos) ---
+    # --- Skenario Dynamic ROI Multi-Zone (Meninggalkan Pos) ---
     if len(groups) == 0:
         global_status_text = "TIDAK TERDETEKSI"
         global_status_color = (128, 128, 128)
 
-    if abs_roi_points and len(abs_roi_points) >= 3:
-        if is_someone_in_roi:
-            roi_empty_start_time = None
-        else:
-            if roi_empty_start_time is None:
-                roi_empty_start_time = current_time
+    if len(abs_roi_polygons) > 0:
+        max_elapsed_empty = 0
+        most_empty_pos_idx = -1
 
-            elapsed_empty = current_time - roi_empty_start_time
-            timer_limit = sys_settings["empty_post_timer"]
+        for i in range(len(abs_roi_polygons)):
+            if roi_occupied_status[i]:
+                roi_empty_timers[i] = None
+            else:
+                if roi_empty_timers.get(i) is None:
+                    roi_empty_timers[i] = current_time
+                
+                elapsed = current_time - roi_empty_timers[i]
+                if elapsed > max_elapsed_empty:
+                    max_elapsed_empty = elapsed
+                    most_empty_pos_idx = i
 
-            if elapsed_empty >= timer_limit:
-                global_status_text = "POS KOSONG!"
-                global_status_color = (0, 165, 255)
+        timer_limit = sys_settings["empty_post_timer"]
 
-                if current_time - last_log_time_left_post > 30: # 30s debounce khusus pos kosong
-                    last_log_time_left_post = current_time
-                    thread = threading.Thread(
-                        target=process_violation_async,
-                        args=(frame.copy(), "left_post", 1.0,
-                              sys_settings["esp32_buzzer_active"],
-                              sys_settings["telegram_bot_active"],
-                              sys_settings["log_enabled"])
-                    )
-                    thread.daemon = True
-                    thread.start()
-            elif elapsed_empty > 0:
-                global_status_text = f"POS KOSONG... {timer_limit - int(elapsed_empty)}s"
-                global_status_color = (0, 255, 255)
+        if max_elapsed_empty >= timer_limit:
+            global_status_text = f"POS {most_empty_pos_idx + 1} KOSONG!"
+            global_status_color = (0, 165, 255)
+
+            last_log = roi_last_log_times.get(most_empty_pos_idx, 0)
+            if current_time - last_log > 30: # 30s debounce khusus per-pos
+                roi_last_log_times[most_empty_pos_idx] = current_time
+                thread = threading.Thread(
+                    target=process_violation_async,
+                    args=(frame.copy(), "left_post", 1.0,
+                          sys_settings["esp32_buzzer_active"],
+                          sys_settings["telegram_bot_active"],
+                          sys_settings["log_enabled"])
+                )
+                thread.daemon = True
+                thread.start()
+        elif max_elapsed_empty > 0:
+            global_status_text = f"POS {most_empty_pos_idx + 1} KOSONG... {timer_limit - int(max_elapsed_empty)}s"
+            global_status_color = (0, 255, 255)
 
     # Draw global status overlay
     actual_h, actual_w = frame.shape[:2]
@@ -411,12 +434,12 @@ def process_single_frame(frame):
     cv2.putText(frame, f"Orang : {num_dets}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
     cv2.putText(frame, f"Tracked : {len(active_trackers)}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
-    return frame, all_detected_classes, global_status_text, global_status_color, is_someone_in_roi
+    return frame, all_detected_classes, global_status_text, global_status_color, is_someone_in_any_roi
 
 
 def process_frame_for_websocket(frame):
     """Callback untuk WebSocket"""
-    annotated_frame, detected_classes, status_text, status_color, is_someone_in_roi = process_single_frame(frame)
+    annotated_frame, detected_classes, status_text, status_color, is_someone_in_any_roi = process_single_frame(frame)
 
     ret, buffer = cv2.imencode('.jpg', annotated_frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
     frame_b64 = ""
@@ -429,7 +452,7 @@ def process_frame_for_websocket(frame):
         "annotated_frame": frame_b64,
         "detections": detections,
         "status": status_text,
-        "roi_occupied": is_someone_in_roi,
+        "roi_occupied": is_someone_in_any_roi,
     }
 
 

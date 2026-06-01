@@ -5,9 +5,13 @@ import { getRoiConfig } from './actions'
 export default async function RoiPage() {
   const streamUrl = process.env.NEXT_PUBLIC_PYTHON_STREAM_URL || "http://localhost:8000"
 
-  // Fetch coordinates from Supabase
   const roiConfig = await getRoiConfig()
-  const initialPoints = roiConfig?.roi_points || []
+  let initialPolygons = roiConfig?.roi_points || []
+  
+  // Backward compatibility: If the database contains a single array of points (depth 2), wrap it in an array to make it depth 3 (list of polygons).
+  if (initialPolygons.length > 0 && typeof initialPolygons[0][0] === 'number') {
+    initialPolygons = [initialPolygons]
+  }
 
   return (
     <DashboardLayout>
@@ -25,13 +29,13 @@ export default async function RoiPage() {
               </h2>
             </div>
             <p className="text-xs text-muted-foreground mt-1 leading-relaxed max-w-3xl">
-              Tentukan batas wilayah utama <strong className="text-foreground font-semibold font-medium">Pos Kerja</strong> pegawai dapur. AI akan mendeteksi presensi pegawai di dalam area poligon ini dan memicu alarm peringatan sirene dapur jika pos kosong lebih dari 5 detik.
+              Tentukan batas wilayah utama <strong className="text-foreground font-semibold font-medium">Pos Kerja</strong> pegawai dapur. AI akan mendeteksi presensi pegawai secara mandiri di setiap pos yang Anda gambar. Alarm akan memicu jika ada <strong className="text-foreground font-semibold font-medium">salah satu pos yang kosong</strong> melebihi batas waktu yang ditentukan di konfigurasi sistem.
             </p>
           </div>
         </div>
 
         <RoiCanvas
-          initialPoints={initialPoints}
+          initialPolygons={initialPolygons}
           streamUrl={streamUrl}
         />
       </div>

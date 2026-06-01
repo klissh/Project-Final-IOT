@@ -14,7 +14,7 @@ export async function getRoiConfig() {
   return data
 }
 
-export async function updateRoiConfig(points: [number, number][]) {
+export async function updateRoiConfig(points: [number, number][][]) {
   const supabase = await createClient()
   
   // Periksa apakah sudah ada konfigurasi untuk camera 0
