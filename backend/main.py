@@ -52,7 +52,7 @@ from modules import supabase_logger, telegram_alert, esp32_serial, stream_server
 # ============================================================
 DEPLOY_MODE = os.getenv("DEPLOY_MODE", "local").lower()
 MODEL_PATH = "best.pt"           # Path ke model (relatif terhadap script)
-WEBCAM_INDEX = 0                 # 0 = webcam default. Coba 1, 2 jika multi-camera
+WEBCAM_INDEX = int(os.getenv("WEBCAM_INDEX", "0"))  # Override via env: WEBCAM_INDEX=1 python main.py
 CONFIDENCE = 0.4                 # Confidence threshold (0.0 - 1.0)
 IOU_THRESHOLD = 0.35             # IoU threshold untuk NMS
 AGNOSTIC_NMS = False             # Harus False agar box 'with_mask' & 'with_hairnet' bisa tumpang tindih di 1 wajah
@@ -292,16 +292,37 @@ def process_single_frame(frame):
                     roi_occupied_status[i] = True
                     is_someone_in_any_roi = True
 
-        # Tentukan status kebersihan untuk grup/orang ini
-        person_status = "safe"
-        if "without_mask_hairnet" in classes:
-            person_status = "no_both"
-        elif "with_mask" in classes and "with_hairnet" in classes:
+        # Tentukan status kebersihan untuk grup/orang ini.
+        # Prioritas: deteksi POSITIF (with_mask, with_hairnet) lebih dipercaya daripada
+        # without_mask_hairnet, karena YOLO bisa mendeteksi keduanya sekaligus pada orang
+        # yang sama (misal: with_hairnet + without_mask_hairnet). Deteksi positif menang.
+        has_mask    = "with_mask" in classes
+        has_hairnet = "with_hairnet" in classes
+
+        if has_mask and has_hairnet:
             person_status = "safe"
-        elif "with_mask" in classes:
+        elif has_mask and not has_hairnet:
+            # Pakai masker, tapi TIDAK pakai hairnet
             person_status = "no_hairnet"
-        elif "with_hairnet" in classes:
+        elif has_hairnet and not has_mask:
+            # Pakai hairnet, tapi TIDAK pakai masker
             person_status = "no_mask"
+        else:
+            # Tidak ada deteksi positif sama sekali → anggap no_both
+            # (mencakup kasus: hanya without_mask_hairnet terdeteksi, atau tidak ada deteksi)
+            person_status = "no_both"
+
+        # Label ringkas yang menunjukkan apa yang TERDETEKSI dan apa yang KURANG
+        # Gunakan ASCII agar OpenCV bisa render (Hershey font tidak support Unicode)
+        detected_parts = []
+        if has_mask:
+            detected_parts.append("mask:OK")
+        else:
+            detected_parts.append("mask:NO")
+        if has_hairnet:
+            detected_parts.append("hairnet:OK")
+        else:
+            detected_parts.append("hairnet:NO")
 
         # Tentukan warna box
         color = (0, 255, 0) if person_status == "safe" else (0, 0, 255)
@@ -310,7 +331,7 @@ def process_single_frame(frame):
 
         # Gambar box
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-        label_text = f"ID:{main_track_id if main_track_id else '?'} | " + ",".join(classes)
+        label_text = f"ID:{main_track_id if main_track_id else '?'} | " + " ".join(detected_parts)
         (w, h), _ = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)
         cv2.rectangle(frame, (x1, y1 - 25), (x1 + w, y1), color, -1)
         cv2.putText(frame, label_text, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
@@ -510,16 +531,34 @@ def run_local():
     model.predict(source=dummy_frame, imgsz=IMG_SIZE, device=DEVICE, verbose=False)
 
     print(f"\n📷 Opening webcam (index {WEBCAM_INDEX})...")
-    cap = cv2.VideoCapture(WEBCAM_INDEX, cv2.CAP_DSHOW)
+    # DroidCam dan virtual camera di Windows harus pakai CAP_DSHOW.
+    # MSMF sering gagal dengan virtual camera driver. Coba DSHOW dulu, fallback ke auto.
+    cap = None
+    for backend, label in [(cv2.CAP_DSHOW, "DSHOW"), (cv2.CAP_MSMF, "MSMF"), (None, "AUTO")]:
+        try:
+            candidate = cv2.VideoCapture(WEBCAM_INDEX, backend) if backend is not None else cv2.VideoCapture(WEBCAM_INDEX)
+            if candidate.isOpened():
+                cap = candidate
+                print(f"   ✅ Berhasil dibuka dengan backend {label}")
+                break
+            candidate.release()
+        except Exception:
+            pass
 
-    if not cap.isOpened():
-        print(f"❌ Gagal buka webcam index {WEBCAM_INDEX}")
+    if cap is None:
+        print(f"❌ Gagal buka webcam index {WEBCAM_INDEX}. Pastikan kamera terhubung dan tidak dipakai aplikasi lain.")
+        print(f"   Coba ubah WEBCAM_INDEX (saat ini: {WEBCAM_INDEX}) jika punya lebih dari 1 kamera.")
         return
 
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
     cap.set(cv2.CAP_PROP_FPS, 30)
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimal buffer: always get the freshest frame
+
+    # Confirm actual resolution granted (camera may downgrade if requested res is unsupported)
+    actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    print(f"   Resolusi aktual: {actual_w}x{actual_h}")
 
     # Shared state between capture thread and AI thread
     latest_raw_frame = [None]
