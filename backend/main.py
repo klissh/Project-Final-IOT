@@ -124,14 +124,30 @@ def poll_settings():
 
         last_settings_poll = current_time
 
+BUZZER_DURATION_SECS = 3  # Harus sama dengan BUZZ_DURATION_MS di esp32 firmware / 1000
+
+
+def trigger_alarm_sequence(violation_type, buzzer_active=True):
+    """
+    Menjalankan urutan alarm: Buzzer dulu → tunggu selesai → putar suara peringatan.
+    Jika buzzer_active=False, keduanya tidak berbunyi.
+    Selalu dijalankan di background thread.
+    """
+    if not buzzer_active:
+        return  # Jika buzzer di-OFF-kan di dashboard, suara juga tidak berbunyi
+    esp32_serial.trigger_buzzer()
+    time.sleep(BUZZER_DURATION_SECS)  # Tunggu buzzer selesai berbunyi
+    audio_player.play_voice(violation_type)
+
+
 
 def process_violation_async(frame, violation_type, confidence, trigger_buzzer=True, send_telegram=True, log_enabled=True):
     """Berjalan di background thread. Menyimpan log DB dan kirim Telegram."""
     print(f"\n⚠️ Merekam pelanggaran: {violation_type} (conf: {confidence:.2f})")
 
     if trigger_buzzer:
-        esp32_serial.trigger_buzzer()
-        audio_player.play_voice(violation_type)
+        # Untuk left_post: jalankan urutan alarm lengkap (buzzer → tunggu → suara)
+        trigger_alarm_sequence(violation_type, buzzer_active=True)
 
     if not log_enabled:
         if send_telegram:
@@ -319,6 +335,8 @@ def process_single_frame(frame):
                     "safe_start": 0,
                     "last_buzz_time": 0,
                     "last_log_time": 0,
+                    "voice_played": False,  # Suara peringatan hanya berbunyi 1x per insiden
+                    "buzzer_played": False,  # Buzzer ESP32 hanya aktif 1x per insiden
                     "last_seen": current_time
                 }
                 
@@ -335,15 +353,22 @@ def process_single_frame(frame):
                     # Reset timer agar langsung trigger
                     tracker["last_buzz_time"] = 0
                     tracker["last_log_time"] = 0
+                    tracker["voice_played"] = False  # Reset suara untuk insiden baru
+                    tracker["buzzer_played"] = False  # Reset buzzer untuk insiden baru
                 
                 # SMOOTHING: Harus konsisten melanggar selama 1 detik penuh
                 if current_time - tracker["violation_start"] >= 1.0:
                     
-                    # A. BUZZER (Diulang setiap 30 detik jika bandel)
-                    if current_time - tracker["last_buzz_time"] >= 30:
-                        if sys_settings["esp32_buzzer_active"]:
-                            esp32_serial.trigger_buzzer()
-                            audio_player.play_voice(person_status)
+                    # A. BUZZER + SUARA (Berurutan: buzzer dulu → tunggu → suara peringatan)
+                    # Hanya 1x per insiden, reset setelah orang menjadi aman
+                    if not tracker["buzzer_played"]:
+                        threading.Thread(
+                            target=trigger_alarm_sequence,
+                            args=(person_status, sys_settings["esp32_buzzer_active"]),
+                            daemon=True
+                        ).start()
+                        tracker["buzzer_played"] = True
+                        tracker["voice_played"] = True
                         tracker["last_buzz_time"] = current_time
                         
                     # B. LOG & TELEGRAM (Hanya 1x per insiden, cooldown 5 menit)
@@ -370,6 +395,8 @@ def process_single_frame(frame):
                 if current_time - tracker["safe_start"] >= 2.5:
                     tracker["status"] = "safe"
                     tracker["violation_start"] = 0
+                    tracker["voice_played"] = False   # Izinkan suara berbunyi lagi jika melanggar ulang
+                    tracker["buzzer_played"] = False  # Izinkan buzzer berbunyi lagi jika melanggar ulang
 
     # 4. Garbage Collection: Hapus ID yang sudah out-of-frame > 5 detik
     for tid in list(active_trackers.keys()):
@@ -492,17 +519,44 @@ def run_local():
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
     cap.set(cv2.CAP_PROP_FPS, 30)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimal buffer: always get the freshest frame
 
-    print(f"\n🎬 Starting headless inference loop (Tracker Active)...")
-    
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
+    # Shared state between capture thread and AI thread
+    latest_raw_frame = [None]
+    frame_lock = threading.Lock()
 
-        annotated_frame, _, _, _, _ = process_single_frame(frame)
-        stream_server.update_frame(annotated_frame)
+    print("\n🎬 Memulai dua thread: AI Inference + Capture Loop...")
 
+    # --- Thread 1: Capture Loop (berjalan secepat mungkin, tanpa blocking AI) ---
+    def capture_loop():
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            with frame_lock:
+                latest_raw_frame[0] = frame  # Selalu simpan frame paling fresh
+
+    capture_thread = threading.Thread(target=capture_loop, daemon=True)
+    capture_thread.start()
+
+    # --- Thread 2: AI Inference Loop (berjalan sesuai kecepatan GPU/CPU) ---
+    def ai_inference_loop():
+        while True:
+            with frame_lock:
+                frame = latest_raw_frame[0]
+
+            if frame is None:
+                time.sleep(0.005)
+                continue
+
+            annotated_frame, _, _, _, _ = process_single_frame(frame)
+            stream_server.update_frame(annotated_frame)
+
+    ai_thread = threading.Thread(target=ai_inference_loop, daemon=True)
+    ai_thread.start()
+
+    # Blokir main thread sampai capture selesai
+    capture_thread.join()
     cap.release()
 
 

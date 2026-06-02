@@ -1,31 +1,53 @@
-# Smart Kitchen Hygiene Detection
+# Smart Kitchen Hygiene Detection - Backend Requirements
 # Install dengan: pip install -r requirements.txt
+#
+# Pastikan Python 3.10+ dan virtual environment aktif:
+#   python -m venv .venv
+#   .\.venv\Scripts\Activate.ps1  (Windows)
+#   source .venv/bin/activate      (Linux/Mac)
+#   pip install -r requirements.txt
 
-# Core ML
+# ============================================================
+# Core ML & Computer Vision
+# ============================================================
 ultralytics>=8.4.0
 torch>=2.0.0
 torchvision>=0.15.0
-
-# Computer Vision
 opencv-python>=4.8.0
-
-# Visualization
-matplotlib>=3.7.0
-
-# Utilities
 numpy>=1.26.0
+
+# ============================================================
+# Visualization
+# ============================================================
+matplotlib>=3.7.0
 Pillow>=10.0.0
 
-# Backend, Cloud, and IoT Integration
-supabase>=2.4.0
+# ============================================================
+# Backend Server
+# ============================================================
 fastapi>=0.111.0
 uvicorn>=0.30.0
-pyserial>=3.5
-python-dotenv>=1.0.1
-
-# Cloud Hosting & MQTT
-paho-mqtt>=2.0.0
 websockets>=12.0
 
-# Audio & Voice Alerts (Laptop)
-pygame>=2.5.0
+# ============================================================
+# Database & Cloud (Supabase)
+# ============================================================
+supabase>=2.4.0
+
+# ============================================================
+# IoT & Hardware
+# ============================================================
+pyserial>=3.5         # Komunikasi Serial ke ESP32 (mode lokal/USB)
+paho-mqtt>=2.0.0      # MQTT ke ESP32 via WiFi (mode cloud/wireless)
+
+# ============================================================
+# Audio & Voice Alerts (Laptop Speaker)
+# ============================================================
+pygame>=2.5.0         # Memutar MP3 peringatan dari laptop
+
+# ============================================================
+# Utilities
+# ============================================================
+python-dotenv>=1.0.1
+requests>=2.28.0
+scipy>=1.10.0

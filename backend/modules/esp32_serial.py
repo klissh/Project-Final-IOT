@@ -19,8 +19,16 @@ for _ in range(4):
 else:
     load_dotenv()
 
-# Deploy mode
-DEPLOY_MODE = os.getenv("DEPLOY_MODE", "local").lower()  # 'local' or 'cloud'
+# Deploy mode (untuk kamera: 'local' atau 'cloud')
+DEPLOY_MODE = os.getenv("DEPLOY_MODE", "local").lower()
+
+# ESP32 mode (independen dari deploy mode):
+# 'serial' = kabel USB langsung ke laptop
+# 'mqtt'   = via WiFi/MQTT (ESP32 tanpa kabel)
+ESP32_MODE = os.getenv("ESP32_MODE", DEPLOY_MODE).lower()
+# Normalisasi: jika DEPLOY_MODE=cloud dan ESP32_MODE tidak di-set, default ke mqtt
+if ESP32_MODE == "cloud":
+    ESP32_MODE = "mqtt"
 
 # Serial config (local mode)
 COM_PORT = os.getenv("ESP32_COM_PORT", "COM3")
@@ -34,11 +42,14 @@ MQTT_TOPIC = os.getenv("MQTT_TOPIC", "smartkitchen/buzzer")
 # Global instances
 ser = None
 mqtt_client = None
+_serial_failed = False  # Flag: jika sudah pernah gagal koneksi, jangan coba lagi
 
 
 def init_serial():
     """Inisialisasi koneksi Serial ke ESP32 (mode lokal)."""
-    global ser
+    global ser, _serial_failed
+    if _serial_failed:
+        return  # Sudah pernah gagal, skip agar tidak memblokir lagi
     try:
         import serial
         if ser is None or not ser.is_open:
@@ -48,7 +59,9 @@ def init_serial():
     except Exception as e:
         print(f"⚠️ Gagal menghubungkan serial ke {COM_PORT}: {e}")
         print("   Pastikan ESP32 terhubung dan port tidak sedang digunakan aplikasi lain (misal Arduino IDE).")
+        print("   💡 Jika ESP32 menggunakan WiFi, ubah DEPLOY_MODE=cloud di file .env.local")
         ser = None
+        _serial_failed = True  # Tandai agar tidak coba lagi
 
 
 def init_mqtt():
@@ -80,11 +93,11 @@ def init_mqtt():
 
 def init():
     """Inisialisasi modul sesuai deploy mode."""
-    if DEPLOY_MODE == "cloud":
-        print(f"☁️ Deploy Mode: CLOUD — menggunakan MQTT (broker: {MQTT_BROKER})")
+    if ESP32_MODE == "mqtt":
+        print(f"☁️ ESP32 Mode: MQTT — menghubungkan ke broker ({MQTT_BROKER}) via WiFi")
         init_mqtt()
     else:
-        print(f"🏠 Deploy Mode: LOCAL — menggunakan Serial (port: {COM_PORT})")
+        print(f"🏠 ESP32 Mode: SERIAL — menggunakan Serial (port: {COM_PORT})")
         init_serial()
 
 
@@ -95,10 +108,10 @@ init_serial_or_mqtt = init
 def trigger_buzzer():
     """
     Mengirimkan sinyal ke ESP32 untuk menyalakan buzzer.
-    Mode cloud: publish ke MQTT topic.
-    Mode local: kirim via Serial.
+    ESP32 Mode mqtt: publish ke MQTT topic (WiFi).
+    ESP32 Mode serial: kirim via kabel Serial USB.
     """
-    if DEPLOY_MODE == "cloud":
+    if ESP32_MODE == "mqtt":
         _trigger_mqtt()
     else:
         _trigger_serial()

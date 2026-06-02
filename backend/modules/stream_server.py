@@ -51,7 +51,7 @@ active_ws_connections: list[WebSocket] = []
 def update_frame(frame):
     """Fungsi untuk dipanggil dari main.py guna mengupdate frame terbaru (mode lokal)."""
     global current_jpeg_frame
-    ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+    ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
     if ret:
         current_jpeg_frame = buffer.tobytes()
 
@@ -59,11 +59,14 @@ def update_frame(frame):
 def generate_mjpeg():
     """Generator untuk mengirim frame secara terus-menerus via HTTP (mode lokal)."""
     global current_jpeg_frame
+    last_sent_frame = None
     while True:
-        if current_jpeg_frame is not None:
+        frame = current_jpeg_frame
+        if frame is not None and frame is not last_sent_frame:
+            last_sent_frame = frame
             yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + current_jpeg_frame + b'\r\n')
-        time.sleep(0.05)
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+        time.sleep(0.016)  # ~60 FPS cap for the sender loop
 
 
 @app.get("/video_feed")

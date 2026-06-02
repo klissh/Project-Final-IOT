@@ -22,8 +22,8 @@
 // ============================================================
 
 // WiFi
-const char* WIFI_SSID = "NAMA_WIFI_ANDA";
-const char* WIFI_PASS = "PASSWORD_WIFI_ANDA";
+const char* WIFI_SSID = "cuklis";
+const char* WIFI_PASS = "cuklis123";
 
 // MQTT Broker
 const char* MQTT_BROKER = "broker.hivemq.com";
