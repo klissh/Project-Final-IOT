@@ -92,28 +92,19 @@ def init():
 init_serial_or_mqtt = init
 
 
-def trigger_buzzer(violation_type="left_post"):
+def trigger_buzzer():
     """
-    Mengirimkan sinyal ke ESP32 untuk menyalakan buzzer dan memutar MP3.
+    Mengirimkan sinyal ke ESP32 untuk menyalakan buzzer.
     Mode cloud: publish ke MQTT topic.
     Mode local: kirim via Serial.
     """
-    # Mapping violation_type to track ID
-    track_id = 4 # Default to left_post (0004.mp3)
-    if violation_type == "no_mask":
-        track_id = 1
-    elif violation_type == "no_hairnet":
-        track_id = 2
-    elif violation_type == "no_both":
-        track_id = 3
-
     if DEPLOY_MODE == "cloud":
-        _trigger_mqtt(track_id)
+        _trigger_mqtt()
     else:
-        _trigger_serial(track_id)
+        _trigger_serial()
 
 
-def _trigger_serial(track_id):
+def _trigger_serial():
     """Trigger buzzer via Serial (mode lokal)."""
     global ser
     try:
@@ -127,9 +118,8 @@ def _trigger_serial(track_id):
 
     if ser and ser.is_open:
         try:
-            command = f"{track_id}\n"
-            ser.write(command.encode('utf-8'))
-            print(f"🔊 Sinyal Buzzer (Track {track_id}) dikirim ke ESP32 via Serial!")
+            ser.write(b"1\n")
+            print("🔊 Sinyal Buzzer dikirim ke ESP32 via Serial!")
         except Exception as e:
             print(f"❌ Error saat mengirim ke Serial: {e}")
             ser = None
@@ -137,7 +127,7 @@ def _trigger_serial(track_id):
         print("⚠️ Bypass pengiriman ke Buzzer (ESP32 tidak terdeteksi via Serial).")
 
 
-def _trigger_mqtt(track_id):
+def _trigger_mqtt():
     """Trigger buzzer via MQTT (mode cloud)."""
     global mqtt_client
 
@@ -146,10 +136,9 @@ def _trigger_mqtt(track_id):
 
     if mqtt_client:
         try:
-            payload = f"BUZZ:{track_id}"
-            result = mqtt_client.publish(MQTT_TOPIC, payload=payload, qos=1)
+            result = mqtt_client.publish(MQTT_TOPIC, payload="BUZZ", qos=1)
             if result.rc == 0:
-                print(f"🔊 Sinyal Buzzer (Track {track_id}) dikirim via MQTT ke topic '{MQTT_TOPIC}'!")
+                print(f"🔊 Sinyal Buzzer dikirim via MQTT ke topic '{MQTT_TOPIC}'!")
             else:
                 print(f"⚠️ MQTT publish gagal, return code: {result.rc}")
         except Exception as e:
@@ -173,7 +162,7 @@ if __name__ == "__main__":
     # Test script
     print(f"Mode: {DEPLOY_MODE}")
     init()
-    print("Mencoba memicu buzzer (Test Track 4)...")
-    trigger_buzzer("left_post")
+    print("Mencoba memicu buzzer...")
+    trigger_buzzer()
     time.sleep(2)
     cleanup()

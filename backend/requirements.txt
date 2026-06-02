@@ -27,3 +27,5 @@ python-dotenv>=1.0.1
 paho-mqtt>=2.0.0
 websockets>=12.0
 
+# Audio & Voice Alerts (Laptop)
+pygame>=2.5.0

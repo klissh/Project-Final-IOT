@@ -45,7 +45,7 @@ else:
 from ultralytics import YOLO
 import torch
 import threading
-from modules import supabase_logger, telegram_alert, esp32_serial, stream_server
+from modules import supabase_logger, telegram_alert, esp32_serial, stream_server, audio_player
 
 # ============================================================
 # KONFIGURASI
@@ -130,7 +130,8 @@ def process_violation_async(frame, violation_type, confidence, trigger_buzzer=Tr
     print(f"\n⚠️ Merekam pelanggaran: {violation_type} (conf: {confidence:.2f})")
 
     if trigger_buzzer:
-        esp32_serial.trigger_buzzer(violation_type)
+        esp32_serial.trigger_buzzer()
+        audio_player.play_voice(violation_type)
 
     if not log_enabled:
         if send_telegram:
@@ -341,7 +342,8 @@ def process_single_frame(frame):
                     # A. BUZZER (Diulang setiap 30 detik jika bandel)
                     if current_time - tracker["last_buzz_time"] >= 30:
                         if sys_settings["esp32_buzzer_active"]:
-                            esp32_serial.trigger_buzzer(person_status)
+                            esp32_serial.trigger_buzzer()
+                            audio_player.play_voice(person_status)
                         tracker["last_buzz_time"] = current_time
                         
                     # B. LOG & TELEGRAM (Hanya 1x per insiden, cooldown 5 menit)

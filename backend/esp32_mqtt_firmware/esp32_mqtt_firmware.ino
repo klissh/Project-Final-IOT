@@ -1,25 +1,21 @@
 /*
- * Smart Kitchen Hygiene - ESP32 MQTT & DFPlayer Mini
+ * Smart Kitchen Hygiene - ESP32 MQTT Buzzer Client
  * =================================================
  * 
- * Firmware ESP32 untuk menerima trigger buzzer via MQTT / Serial,
- * dan memutar MP3 suara peringatan dari DFPlayer Mini.
+ * Firmware ESP32 untuk menerima trigger buzzer via MQTT (Cloud)
+ * maupun via kabel Serial (Lokal).
  * 
  * Hardware:
  *   - ESP32 Development Board
  *   - Active Buzzer pada pin GPIO 25
- *   - DFPlayer Mini pada Serial2 (TX=17, RX=16)
  * 
  * Library yang dibutuhkan:
  *   - PubSubClient by Nick O'Leary
- *   - DFRobotDFPlayerMini by DFRobot
  *   - WiFi (built-in)
  */
 
 #include <WiFi.h>
 #include <PubSubClient.h>
-#include <HardwareSerial.h>
-#include "DFRobotDFPlayerMini.h"
 
 // ============================================================
 // KONFIGURASI
@@ -39,10 +35,6 @@ const char* MQTT_CLIENT_ID = "esp32_kitchen_buzzer";
 const int BUZZER_PIN = 25;
 const int LED_PIN    = 2;   // Built-in LED ESP32
 
-// DFPlayer Hardware Serial (UART2)
-HardwareSerial mySoftwareSerial(2); // RX=16, TX=17
-DFRobotDFPlayerMini myDFPlayer;
-
 // Buzzer Settings
 const int BUZZ_DURATION_MS = 3000;  // 3 detik buzzer nyala
 
@@ -55,7 +47,6 @@ PubSubClient mqttClient(wifiClient);
 unsigned long lastReconnectAttempt = 0;
 unsigned long buzzerOffTime = 0;
 bool buzzerActive = false;
-int currentTrackToPlay = 0;
 
 // ============================================================
 // FUNCTIONS
@@ -94,16 +85,14 @@ void setupWiFi() {
   }
 }
 
-void triggerBuzzer(int trackId) {
-  Serial.print("🔊 BUZZER AKTIF! Antrian track MP3: ");
-  Serial.println(trackId);
+void triggerBuzzer() {
+  Serial.println("🔊 BUZZER AKTIF!");
   
   digitalWrite(BUZZER_PIN, HIGH);
   digitalWrite(LED_PIN, HIGH);
   
   buzzerActive = true;
   buzzerOffTime = millis() + BUZZ_DURATION_MS;
-  currentTrackToPlay = trackId;
 }
 
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
@@ -115,12 +104,8 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   Serial.print("📩 Pesan MQTT diterima: ");
   Serial.println(message);
 
-  if (message.startsWith("BUZZ:")) {
-    int track = message.substring(5).toInt();
-    if (track <= 0) track = 4;
-    triggerBuzzer(track);
-  } else if (message == "BUZZ") {
-    triggerBuzzer(4);
+  if (message.startsWith("BUZZ")) {
+    triggerBuzzer();
   }
 }
 
@@ -155,26 +140,13 @@ void setup() {
   delay(100);
 
   Serial.println("===========================================");
-  Serial.println("🍳 Smart Kitchen - ESP32 AI Buzzer & Voice");
+  Serial.println("🍳 Smart Kitchen - ESP32 AI Buzzer");
   Serial.println("===========================================");
 
   pinMode(BUZZER_PIN, OUTPUT);
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(BUZZER_PIN, LOW);
   digitalWrite(LED_PIN, LOW);
-
-  // Setup DFPlayer Mini
-  mySoftwareSerial.begin(9600, SERIAL_8N1, 16, 17);  // RX=16, TX=17
-  Serial.println("\n🚀 Inisialisasi DFPlayer Mini...");
-  
-  if (!myDFPlayer.begin(mySoftwareSerial)) {
-    Serial.println("❌ DFPlayer Mini gagal merespon!");
-    Serial.println("   - Cek koneksi: TX ESP(17) -> RX MP3, RX ESP(16) -> TX MP3");
-    Serial.println("   - Pastikan SD Card berisi folder /mp3/");
-  } else {
-    Serial.println("✅ DFPlayer Mini terdeteksi!");
-    myDFPlayer.volume(25);  // Set volume (0-30)
-  }
 
   setupWiFi();
   mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
@@ -190,10 +162,7 @@ void loop() {
     String msg = Serial.readStringUntil('\n');
     msg.trim();
     if (msg.length() > 0) {
-      int track = msg.toInt();
-      if (track >= 1 && track <= 4) {
-        triggerBuzzer(track);
-      }
+      triggerBuzzer();
     }
   }
 
@@ -212,18 +181,11 @@ void loop() {
     }
   }
 
-  // 3. Matikan buzzer jika timeout, lalu Play Suara AI
+  // 3. Matikan buzzer jika timeout
   if (buzzerActive && millis() >= buzzerOffTime) {
     digitalWrite(BUZZER_PIN, LOW);
     digitalWrite(LED_PIN, LOW);
     buzzerActive = false;
     Serial.println("🔇 Buzzer mati (3s timeout).");
-    
-    if (currentTrackToPlay > 0) {
-      Serial.print("▶️ Memutar MP3 Peringatan AI, Track: ");
-      Serial.println(currentTrackToPlay);
-      myDFPlayer.play(currentTrackToPlay);
-      currentTrackToPlay = 0;
-    }
   }
 }
