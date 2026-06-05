@@ -8,7 +8,7 @@ import { Eye, EyeOff, Loader2, AlertCircle } from 'lucide-react'
 import { login } from './actions'
 
 import Image from 'next/image'
-import logoArka from '@/components/logo/logo arkahygiene.png'
+import logoArka from '@/components/logo/arkahygiene_logo 2_hitam_tp.png'
 
 export function LoginForm({ errorMessage }: { errorMessage?: string }) {
   const [showPassword, setShowPassword] = useState(false)
@@ -22,13 +22,13 @@ export function LoginForm({ errorMessage }: { errorMessage?: string }) {
     <div className="w-full max-w-[390px] p-7 md:p-8 rounded-2xl border border-zinc-900 bg-zinc-950/40 backdrop-blur-md shadow-2xl text-zinc-200 relative overflow-hidden">
       {/* Brand Header */}
       <div className="flex flex-col items-center text-center space-y-4 mb-7">
-        <div className="flex h-12 w-12 items-center justify-center shrink-0 overflow-hidden p-1">
+        <div className="flex h-16 w-16 items-center justify-center shrink-0 overflow-hidden p-1">
           <Image src={logoArka} alt="ArkaHygiene" className="w-full h-full object-contain mix-blend-screen invert opacity-90" />
         </div>
         
         <div className="space-y-1">
           <h2 className="text-xl font-bold tracking-tight text-white">
-            ArkaHygiene Admin
+            ArkaHygiene Login
           </h2>
           <p className="text-xs text-zinc-500 leading-normal">
             Masukkan kredensial Anda untuk mengakses dashboard AIoT.

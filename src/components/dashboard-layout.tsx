@@ -9,7 +9,7 @@ import {
 import { signOut } from '@/app/login/actions'
 
 import Image from 'next/image'
-import logoArka from '@/components/logo/logo arkahygiene.png'
+import logoArka from '@/components/logo/arkahygiene_logo 2_hitam_tp.png'
 
 // Persistent in-memory state across client-side SPA navigations to prevent page transition glitches
 let globalCollapsed = false
@@ -83,7 +83,7 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
       >
         {/* Logo */}
         <div className="flex items-center h-16 px-4 gap-3 border-b border-border shrink-0 overflow-hidden">
-          <div className="flex h-11 w-11 items-center justify-center shrink-0 overflow-hidden">
+          <div className="flex h-12 w-12 items-center justify-center shrink-0 overflow-hidden">
             <Image src={logoArka} alt="ArkaHygiene" className="w-full h-full object-contain mix-blend-multiply dark:mix-blend-screen dark:invert opacity-90" />
           </div>
           <div
