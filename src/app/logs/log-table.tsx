@@ -1,12 +1,12 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Badge } from '@/components/ui/badge'
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
 import { Button } from '@/components/ui/button'
-import { Trash2, Loader2, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Trash2, Loader2, ChevronLeft, ChevronRight, X } from 'lucide-react'
 import { deleteViolations } from './actions'
 import { toast } from 'sonner'
 import {
@@ -47,6 +47,16 @@ export function LogTable({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [isDeleting, setIsDeleting] = useState(false)
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
+  const [photoUrl, setPhotoUrl] = useState<string | null>(null)
+
+  const closePhoto = useCallback(() => setPhotoUrl(null), [])
+
+  useEffect(() => {
+    if (!photoUrl) return
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') closePhoto() }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [photoUrl, closePhoto])
 
   const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {
     setSelectedIds(e.target.checked ? new Set(initialViolations.map(v => v.id)) : new Set())
@@ -163,14 +173,12 @@ export function LogTable({
                   </TableCell>
                   <TableCell onClick={e => e.stopPropagation()}>
                     {v.screenshot_url ? (
-                      <a
-                        href={v.screenshot_url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-xs font-medium text-blue-500 hover:underline"
+                      <button
+                        onClick={() => setPhotoUrl(v.screenshot_url)}
+                        className="text-xs font-medium text-blue-500 hover:underline cursor-pointer"
                       >
                         Lihat Foto
-                      </a>
+                      </button>
                     ) : (
                       <span className="text-xs text-muted-foreground/50">—</span>
                     )}
@@ -264,6 +272,32 @@ export function LogTable({
             >
               <ChevronRight className="h-4 w-4" />
             </Link>
+          </div>
+        </div>
+      )}
+
+      {/* Photo viewer modal */}
+      {photoUrl && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm"
+          onClick={closePhoto}
+        >
+          <div
+            className="relative max-w-[90vw] max-h-[90vh]"
+            onClick={e => e.stopPropagation()}
+          >
+            <button
+              onClick={closePhoto}
+              className="absolute -top-3 -right-3 z-10 flex h-7 w-7 items-center justify-center rounded-full bg-foreground text-background shadow-lg hover:opacity-80 transition-opacity"
+              aria-label="Tutup"
+            >
+              <X className="h-4 w-4" />
+            </button>
+            <img
+              src={photoUrl}
+              alt="Bukti pelanggaran"
+              className="rounded-xl max-w-[90vw] max-h-[90vh] object-contain shadow-2xl"
+            />
           </div>
         </div>
       )}

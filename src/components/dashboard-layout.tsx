@@ -82,12 +82,12 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
           } ${collapsed ? 'w-16' : 'w-60'}`}
       >
         {/* Logo */}
-        <div className="flex items-center h-16 px-4 gap-3 border-b border-border shrink-0 overflow-hidden">
+        <div className={`flex items-center h-16 gap-3 border-b border-border shrink-0 overflow-hidden ${collapsed ? 'px-2' : 'px-4'}`}>
           <div className="flex h-12 w-12 items-center justify-center shrink-0 overflow-hidden">
             <Image src={logoArka} alt="ArkaHygiene" className="w-full h-full object-contain mix-blend-multiply dark:mix-blend-screen dark:invert opacity-90" />
           </div>
           <div
-            className={`flex flex-col transition-all duration-300 ease-in-out ${collapsed ? 'opacity-0 translate-x-4 pointer-events-none' : 'opacity-100 translate-x-0'
+            className={`flex flex-col transition-all duration-300 ease-in-out ${collapsed ? 'opacity-0 w-0 pointer-events-none overflow-hidden' : 'opacity-100 translate-x-0'
               }`}
           >
             <p className="text-sm font-bold leading-none text-foreground tracking-tight whitespace-nowrap">ArkaHygiene</p>
